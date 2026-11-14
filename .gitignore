@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.local
+*.tsbuildinfo
+.DS_Store
+vite.config.js
+vite.config.d.ts
+# Phase A additions
+.env
+.env.*
+!.env.example
+server/data/
