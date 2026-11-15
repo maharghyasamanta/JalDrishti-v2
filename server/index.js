@@ -78,36 +78,8 @@ async function tryServeStatic(req, res, pathname) {
   return true;
 }
 
-export function createHandler(alertsService, earthquakeService) {
+export function createHandler(alertsService, earthquakeService, { getViteMiddlewares } = {}) {
   const router = createRouter();
-
-  // Public GET routes – unchanged behavior
-  router.add('GET', '/healthz', (req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
-  });
-
-  router.add('GET', '/api/alerts', (req, res) => {
-    const payload = alertsService.getPayload();
-    if (!payload) {
-      res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ generatedAt: null, upstreamOk: false, alerts: [], unresolvedCount: 0, error: 'Alert data not available yet' }));
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' });
-    res.end(JSON.stringify(payload));
-  });
-
-  router.add('GET', '/api/earthquakes', (req, res) => {
-    const payload = earthquakeService.getPayload();
-    if (!payload) {
-      res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ generatedAt: null, ok: false, quakes: [], totalCount: 0, error: 'Earthquake data not available yet' }));
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' });
-    res.end(JSON.stringify(payload));
-  });
 
   // Future routes (admin, subscribe, etc.) will be added by other modules.
 
@@ -124,19 +96,56 @@ export function createHandler(alertsService, earthquakeService) {
       return;
     }
 
-    // Admin/auth protection for admin paths or any non‑GET public POST routes
-    const needsAuth = url.pathname.startsWith('/api/admin/') || (!isPublic && req.method !== 'GET' && req.method !== 'HEAD');
-    if (needsAuth) {
+    // Public GET/HEAD endpoints handled BEFORE auth, rate-limit, and body parsing
+    if (isPublic) {
+      if (url.pathname === '/healthz') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (url.pathname === '/api/alerts') {
+        const payload = alertsService?.getPayload();
+        if (!payload) {
+          res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ generatedAt: null, upstreamOk: false, alerts: [], unresolvedCount: 0, error: 'Alert data not available yet' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' });
+        res.end(req.method === 'HEAD' ? undefined : JSON.stringify(payload));
+        return;
+      }
+
+      if (url.pathname === '/api/earthquakes') {
+        const payload = earthquakeService?.getPayload();
+        if (!payload) {
+          res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ generatedAt: null, ok: false, quakes: [], totalCount: 0, error: 'Earthquake data not available yet' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' });
+        res.end(req.method === 'HEAD' ? undefined : JSON.stringify(payload));
+        return;
+      }
+    }
+
+    // Admin/auth protection applies ONLY to paths starting with /api/admin/
+    if (url.pathname.startsWith('/api/admin/')) {
       if (!checkRateLimit(req)) {
         res.writeHead(429, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
         return;
       }
-      const ok = await checkAdminAuth(req, res);
-      if (!ok) return; // response already sent
+      const r = await checkAdminAuth(req);
+      if (!r.ok) {
+        const errBody = typeof r.error === 'string' ? { error: r.error } : r.error;
+        res.writeHead(r.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(errBody));
+        return;
+      }
     }
 
-    // Parse JSON bodies for POST/PUT (future endpoints)
+    // Parse JSON bodies for POST/PUT/PATCH
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
       const bodyResult = await parseBody(req);
       if (!bodyResult.ok) {
@@ -155,6 +164,15 @@ export function createHandler(alertsService, earthquakeService) {
     }
 
     if (isPublic && !url.pathname.startsWith('/api/')) {
+      if (getViteMiddlewares) {
+        const middlewares = await getViteMiddlewares();
+        if (middlewares) {
+          await new Promise((resolve, reject) => {
+            middlewares(req, res, (err) => (err ? reject(err) : resolve()));
+          });
+          if (res.writableEnded) return;
+        }
+      }
       const served = await tryServeStatic(req, res, url.pathname);
       if (served) return;
     }
@@ -177,9 +195,31 @@ export function start() {
   const eqTimer = setInterval(() => earthquakeService.refresh(), EQ_REFRESH_MS);
   eqTimer.unref?.();
 
+  const isProd = process.env.NODE_ENV === 'production';
+  let vitePromise = null;
+  const getViteMiddlewares = isProd
+    ? null
+    : () => {
+        if (!vitePromise) {
+          vitePromise = import('vite')
+            .then(({ createServer }) =>
+              createServer({
+                server: { middlewareMode: true, hmr: false, allowedHosts: true },
+                appType: 'spa',
+              }),
+            )
+            .then((vite) => vite.middlewares)
+            .catch((err) => {
+              log('Vite middleware unavailable, falling back to static dist:', err.message);
+              return null;
+            });
+        }
+        return vitePromise;
+      };
+
   const port = Number(process.env.PORT) || 3000;
   const host = process.env.HOST || '0.0.0.0';
-  const server = http.createServer(createHandler(alertsService, earthquakeService));
+  const server = http.createServer(createHandler(alertsService, earthquakeService, { getViteMiddlewares }));
   server.listen(port, host, () => log(`Server listening on http://${host}:${port} (alerts + earthquakes)`));
   return server;
 }

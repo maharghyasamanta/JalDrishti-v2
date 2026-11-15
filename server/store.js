@@ -1,8 +1,11 @@
 import { promises as fs } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { auditLog } from './audit.js';
 
-const DATA_DIR = resolve('server', 'data');
+const DATA_DIR = process.env.SMS_DATA_DIR
+  ? resolve(process.env.SMS_DATA_DIR)
+  : join(dirname(fileURLToPath(import.meta.url)), 'data');
 const BACKUP_COUNT = 5;
 const SCHEMA_VERSION = 1;
 

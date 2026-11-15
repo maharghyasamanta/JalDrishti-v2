@@ -1,17 +1,23 @@
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { PassThrough } from 'node:stream';
-import { resolve } from 'node:path';
-import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
+import os from 'node:os';
+import fsSync, { promises as fs } from 'node:fs';
+
+const prevSmsDataDir = process.env.SMS_DATA_DIR;
+const testDataDir = fsSync.mkdtempSync(join(os.tmpdir(), 'jaldrishti-test-'));
+process.env.SMS_DATA_DIR = testDataDir;
 
 import { checkAdminAuth } from './auth.js';
 import { applyCors } from './cors.js';
 import { parseBody } from './body.js';
 import { createRouter } from './router.js';
-import { Store } from './store.js';
+const { Store } = await import('./store.js');
 
-// Helper to create mock req/res
+const VALID_TOKEN = 'A'.repeat(32);
+
+// Helper to create mock req/res (no real sockets)
 function mockReq({ method = 'GET', headers = {}, url = '/', body = null, socketRemote = '127.0.0.1' } = {}) {
   const stream = new PassThrough();
   if (body) stream.end(body);
@@ -37,27 +43,47 @@ function mockRes() {
 
 describe('Phase A tests', () => {
   beforeEach(() => {
-    process.env.ADMIN_TOKEN = 'A'.repeat(24);
+    process.env.ADMIN_TOKEN = VALID_TOKEN;
   });
 
-  test('admin auth success and timing‑safe compare', async () => {
-    const req = mockReq({ headers: { authorization: `Bearer ${process.env.ADMIN_TOKEN}` } });
-    const res = mockRes();
-    const ok = await checkAdminAuth(req, res);
-    assert.ok(ok, 'auth should succeed');
-    assert.equal(res.statusCode, undefined);
+  test('admin auth missing token => 503', async () => {
+    delete process.env.ADMIN_TOKEN;
+    const req = mockReq({ headers: { authorization: `Bearer ${VALID_TOKEN}` }, socketRemote: '10.0.0.1' });
+    const result = await checkAdminAuth(req);
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 503);
   });
 
-  test('admin auth missing header => 401 then lockout after 5 attempts', async () => {
-    for (let i = 1; i <= 5; i++) {
-      const req = mockReq({ headers: {} });
-      const res = mockRes();
-      const ok = await checkAdminAuth(req, res);
-      assert.equal(ok, false);
+  test('admin auth short token => 503', async () => {
+    process.env.ADMIN_TOKEN = 'too-short';
+    const req = mockReq({ headers: { authorization: 'Bearer too-short' }, socketRemote: '10.0.0.2' });
+    const result = await checkAdminAuth(req);
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 503);
+  });
+
+  test('admin auth wrong token => 401', async () => {
+    const req = mockReq({ headers: { authorization: 'Bearer wrong-token' }, socketRemote: '10.0.0.3' });
+    const result = await checkAdminAuth(req);
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 401);
+  });
+
+  test('admin auth correct token => ok (200)', async () => {
+    const req = mockReq({ headers: { authorization: `Bearer ${VALID_TOKEN}` }, socketRemote: '10.0.0.4' });
+    const result = await checkAdminAuth(req);
+    assert.equal(result.ok, true);
+  });
+
+  test('admin auth lockout: 6th failed attempt => 429', async () => {
+    for (let i = 1; i <= 6; i++) {
+      const req = mockReq({ headers: { authorization: 'Bearer wrong-token' }, socketRemote: '10.0.0.5' });
+      const result = await checkAdminAuth(req);
+      assert.equal(result.ok, false);
       if (i < 5) {
-        assert.equal(res.statusCode, 401);
+        assert.equal(result.status, 401);
       } else {
-        assert.equal(res.statusCode, 429);
+        assert.equal(result.status, 429);
       }
     }
   });
@@ -86,6 +112,12 @@ describe('Phase A tests', () => {
     assert.equal(result.error.status, 413);
   });
 
+  after(() => {
+    fsSync.rmSync(testDataDir, { recursive: true, force: true });
+    if (prevSmsDataDir === undefined) delete process.env.SMS_DATA_DIR;
+    else process.env.SMS_DATA_DIR = prevSmsDataDir;
+  });
+
   test('store write/read atomic and corrupt recovery', async () => {
     const key = 'teststore';
     const data = { foo: 'bar' };
@@ -93,13 +125,13 @@ describe('Phase A tests', () => {
     const read1 = await Store.read(key);
     assert.equal(read1.foo, 'bar');
     // Corrupt the file manually
-    const filePath = resolve('server', 'data', `${key}.json`);
+    const filePath = join(testDataDir, `${key}.json`);
     await fs.writeFile(filePath, '{ not json', 'utf8');
     const read2 = await Store.read(key);
     // Should return fresh object (no foo) and not throw
     assert.ok(!read2.foo);
     // A .corrupt- file should exist (we can't know name, but file should be renamed)
-    const files = await fs.readdir(resolve('server', 'data'));
+    const files = await fs.readdir(testDataDir);
     const corrupt = files.find(f => f.startsWith(`${key}.json.corrupt-`));
     assert.ok(corrupt, 'corrupt file created');
   });
