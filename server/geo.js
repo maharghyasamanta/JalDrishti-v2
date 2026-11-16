@@ -92,10 +92,28 @@ function buildIndex() {
   return cachedFeatures;
 }
 
+const EARTH_RADIUS_KM = 6371;
+const toRad = (deg) => (deg * Math.PI) / 180;
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function bboxLowerBoundKm(lat, lon, bbox) {
+  const clampedLat = Math.min(Math.max(lat, bbox.minLat), bbox.maxLat);
+  const clampedLon = Math.min(Math.max(lon, bbox.minLon), bbox.maxLon);
+  return haversineKm(lat, lon, clampedLat, clampedLon);
+}
+
 /**
  * Returns the canonical Indian state/UT name containing (lat, lon), or null if outside India.
  */
-export function pointInIndia(lat, lon) {
+export function stateAtPoint(lat, lon) {
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   const index = buildIndex();
   for (const feature of index) {
@@ -107,3 +125,41 @@ export function pointInIndia(lat, lon) {
   }
   return null;
 }
+
+/**
+ * Existing export preserved for earthquakes and existing tests.
+ */
+export function pointInIndia(lat, lon) {
+  return stateAtPoint(lat, lon);
+}
+
+/**
+ * Returns the closest canonical Indian state/UT whose boundary vertices lie within `km`, or null.
+ */
+export function nearestStateWithin(lat, lon, km) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(km) || km < 0) {
+    return null;
+  }
+  const index = buildIndex();
+  let bestName = null;
+  let bestDist = Infinity;
+
+  for (const feature of index) {
+    if (bboxLowerBoundKm(lat, lon, feature.bbox) > km + 5) continue;
+    for (const poly of feature.polygons) {
+      if (bboxLowerBoundKm(lat, lon, poly.bbox) > km + 5) continue;
+      for (const ring of poly.rings) {
+        for (const pt of ring) {
+          const d = haversineKm(lat, lon, pt[1], pt[0]);
+          if (d < bestDist) {
+            bestDist = d;
+            bestName = feature.name;
+          }
+        }
+      }
+    }
+  }
+
+  return bestDist <= km ? bestName : null;
+}
+

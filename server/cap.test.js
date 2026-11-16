@@ -55,10 +55,20 @@ test('alert without English block is kept with "Details in original alert" and n
   assert.equal(a.detailsInOriginal, true);
   assert.equal(a.areaDesc, '');
   assert.equal(a.sender, null);
-  assert.equal(a.unresolved, true);
+  // MH-27 places the alert via language-neutral state geocode; unmapped geocode stays unresolved
+  assert.equal(a.placement, 'geocode');
+  assert.deepEqual(a.states, ['Maharashtra']);
+  assert.equal(a.unresolved, false);
   assert.deepEqual(a.areaCodes, [{ name: 'SDMA', value: 'MH-27' }]);
   assert.equal(a.severity, 'Severe');
   assert.ok(!/[ऀ-ॿ]/.test(JSON.stringify(a)), 'no Devanagari in output');
+
+  const unmapped = parseCap(cap({ infos: `<cap:info><cap:language>hi-IN</cap:language><cap:category>Met</cap:category><cap:event>Flood</cap:event>
+    <cap:severity>Severe</cap:severity><cap:senderName>मौसम विभाग</cap:senderName><cap:headline>बाढ़ की चेतावनी</cap:headline>
+    <cap:area><cap:areaDesc>पुणे</cap:areaDesc><cap:geocode><cap:valueName>SDMA</cap:valueName><cap:value>XX-99</cap:value></cap:geocode></cap:area></cap:info>` }));
+  const ua = normalizeAlert(unmapped, index);
+  assert.equal(ua.placement, 'none');
+  assert.equal(ua.unresolved, true);
 });
 
 test('parseReferences handles sender,identifier,sent triples', () => {
@@ -89,8 +99,15 @@ test('water hazards are flagged waterRelated (event, category or headline, case-
   const mk = (event, headline = '', category = 'Met') => parseCap(cap({ infos: `<cap:info><cap:language>en</cap:language><cap:category>${category}</cap:category>
     <cap:event>${event}</cap:event><cap:severity>Moderate</cap:severity><cap:headline>${headline}</cap:headline>
     <cap:area><cap:areaDesc>Pune</cap:areaDesc></cap:area></cap:info>` }));
-  for (const e of ['FLASH FLOOD', 'Very Heavy Rain', 'Cloudburst', 'Landslide', 'Cyclone', 'Storm Surge', 'High Waves', 'Tsunami', 'Dam release']) {
-    assert.equal(mk(e).waterRelated, true, e);
+  for (const e of ['FLASH FLOOD', 'Very Heavy Rain', 'Cloudburst', 'Landslide', 'Cyclone', 'Dam release']) {
+    const parsed = mk(e);
+    assert.equal(parsed.waterRelated, true, e);
+    assert.equal(parsed.hazard, 'water', e);
+  }
+  for (const e of ['Storm Surge', 'High Waves', 'Tsunami']) {
+    const parsed = mk(e);
+    assert.equal(parsed.waterRelated, true, e);
+    assert.equal(parsed.hazard, 'coastal', e);
   }
   assert.equal(mk('Unknown', 'Flood warning for river').waterRelated, true, 'via headline');
   assert.equal(mk('Unknown', '', 'Flood').waterRelated, true, 'via category');
@@ -115,8 +132,11 @@ test('Test/Exercise status alerts are not shown', () => {
   assert.deepEqual(selectActive([m], NOW), []);
 });
 
-test('hazards are grouped: water first, then storm, heat, cold, other', () => {
+test('hazards are grouped: coastal first, then water, storm, heat, cold, other', () => {
   const cases = {
+    'High Waves': 'coastal', 'Rough Sea': 'coastal', 'Swell Surge': 'coastal', 'High Tide': 'coastal',
+    'Storm Surge': 'coastal', 'Tsunami': 'coastal', 'Kallakkadal': 'coastal', 'Fishermen warning': 'coastal',
+    'Coastal flooding': 'coastal', 'Cyclone': 'water',
     'Heavy Rain': 'water', 'Flash Flood': 'water', 'Heavy rain with thunderstorm': 'water',
     'Thunderstorm': 'storm', 'Lightning': 'storm', 'Dust Storm': 'storm', 'Strong Winds': 'storm', 'Hailstorm': 'storm',
     'Heat Wave': 'heat', 'Hot weather': 'heat', 'Warm night': 'heat',

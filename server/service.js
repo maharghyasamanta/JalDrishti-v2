@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseRss } from './rss.js';
 import { parseCap, selectActive, normalizeAlert } from './cap.js';
+import { stateAtPoint, nearestStateWithin } from './geo.js';
 
 export const RSS_URL = 'https://sachet.ndma.gov.in/cap_public_website/rss/rss_india.xml';
 export const CAP_URL = 'https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile';
@@ -49,9 +50,15 @@ export function loadDistrictIndex(path) {
 }
 
 /**
- * @param {{ fetchText?: (url:string)=>Promise<string>, districtIndex: Record<string,string[]>, now?: ()=>number, log?: (...a:any[])=>void }} opts
+ * @param {{ fetchText?: (url:string)=>Promise<string>, districtIndex: Record<string,string[]>, now?: ()=>number, log?: (...a:any[])=>void, geo?: { stateAtPoint?: Function, nearestStateWithin?: Function } }} opts
  */
-export function createAlertsService({ fetchText = httpFetchText, districtIndex, now = Date.now, log = () => {} }) {
+export function createAlertsService({
+  fetchText = httpFetchText,
+  districtIndex,
+  now = Date.now,
+  log = () => {},
+  geo = { stateAtPoint, nearestStateWithin },
+}) {
   const capCache = new Map();   // guid -> parsed CAP message (CAP messages are immutable)
   let lastGood = null;          // { generatedAt, messages }
   let lastRefreshOk = null;     // null until first attempt finishes
@@ -101,7 +108,8 @@ export function createAlertsService({ fetchText = httpFetchText, districtIndex, 
   /** Current public payload, or null before the first successful refresh. Expiry is applied at request time. */
   function getPayload() {
     if (!lastGood) return null;
-    const alerts = selectActive(lastGood.messages, now(), { waterOnly: WATER_ONLY }).map((m) => normalizeAlert(m, districtIndex));
+    const alerts = selectActive(lastGood.messages, now(), { waterOnly: WATER_ONLY })
+      .map((m) => normalizeAlert(m, districtIndex, geo));
     return {
       generatedAt: lastGood.generatedAt,
       upstreamOk: lastRefreshOk === true,
