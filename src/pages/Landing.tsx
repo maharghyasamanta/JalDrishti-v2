@@ -33,7 +33,7 @@ export default function Landing() {
             <span className="eyebrow">Explore Modules</span>
             <h2 className="section-title">Disaster Intelligence Capabilities</h2>
             <p className="section-sub">
-              Access dedicated geographical intelligence tools covering past flood &amp; climate disaster records, real-time weather alerts, and 30-day seismic events.
+              Access dedicated geographical intelligence tools covering past flood &amp; climate disaster records, real-time weather alerts, 30-day seismic events and SMS alert subscriptions.
             </p>
           </div>
 
@@ -102,6 +102,28 @@ export default function Landing() {
               </p>
               <div className="fc-action">
                 <span>Open Seismic Map</span>
+                <span className="fc-arrow"><ArrowRight size={16} /></span>
+              </div>
+            </Link>
+
+            {/* Card 4: SMS Alerts */}
+            <Link to="/subscribe" className="feature-card" aria-label="Open SMS Alerts">
+              <div className="fc-top">
+                <div className="fc-icon-wrap" style={{ background: 'rgba(47, 111, 219, 0.12)', color: '#2f6fdb' }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    <line x1="8" y1="9" x2="16" y2="9"></line>
+                    <line x1="8" y1="13" x2="13" y2="13"></line>
+                  </svg>
+                </div>
+                <span className="badge badge-demo">Demo</span>
+              </div>
+              <h3 className="fc-title">SMS Alerts</h3>
+              <p className="fc-desc">
+                Subscribe with your mobile number to get hazard alerts for your area by SMS. Demo mode: messages are simulated.
+              </p>
+              <div className="fc-action">
+                <span>Subscribe Now</span>
                 <span className="fc-arrow"><ArrowRight size={16} /></span>
               </div>
             </Link>

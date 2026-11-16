@@ -9,9 +9,7 @@ export default function Earthquakes() {
         subtitle="Last 30 days of earthquake epicenters across India and surrounding regions with BIS seismic hazard zones."
         badge="NCS Live Feed"
       />
-      <div style={{ paddingTop: 20 }}>
-        <EarthquakeMap />
-      </div>
+      <EarthquakeMap />
     </div>
   );
 }

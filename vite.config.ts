@@ -5,12 +5,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    port: 3000,
+    port: 5173,
     allowedHosts: true,
     proxy: {
       // Development only: forward /api to the local alerts server (see server/).
       '/api': {
-        target: 'http://localhost:8787',
+        target: 'http://localhost:3000',
         changeOrigin: false,
       },
     },

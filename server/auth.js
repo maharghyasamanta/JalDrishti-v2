@@ -1,10 +1,17 @@
-// Admin authentication module (Phase A).
-// Exposes getAdminToken() and a pure checkAdminAuth(req) returning an object.
-// The request handler is responsible for sending HTTP responses.
+// Admin authentication module.
+// Exposes getAdminToken(), checkAdminAuth(req, opts), and resetAuthFailures().
+// Returns { ok, status?, error?, headers? } and never writes to res.
 
 import crypto from 'node:crypto';
-import { appendFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { auditLog } from './audit.js';
+import { clientIp } from './ip.js';
+
+const LOCKOUT_LIMIT = 5;
+const LOCKOUT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_SWEEP_PER_CALL = 256;
+
+// ip -> number[] (failure timestamps within sliding window)
+const failures = new Map();
 
 export function getAdminToken() {
   const t = process.env.ADMIN_TOKEN;
@@ -12,32 +19,50 @@ export function getAdminToken() {
   return t;
 }
 
-// Failure tracking for lock‑out (5 attempts within 15 min per IP).
-const failures = new Map(); // ip -> { count, first }
-const LOCKOUT_LIMIT = 5;
-const LOCKOUT_WINDOW_MS = 15 * 60 * 1000;
-
-function now() { return Date.now(); }
-function clean(ip) {
-  const rec = failures.get(ip);
-  if (rec && now() - rec.first > LOCKOUT_WINDOW_MS) failures.delete(ip);
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value), 'utf8').digest();
 }
 
-async function auditLog(entry) {
-  const line = JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + '\n';
-  const logPath = resolve('server', 'data', 'audit.log');
-  await appendFile(logPath, line, { encoding: 'utf8' }).catch(() => {});
+function sweepOldEntries(currentNow) {
+  const cutoff = currentNow - LOCKOUT_WINDOW_MS;
+  let scanned = 0;
+  for (const [ip, timestamps] of failures.entries()) {
+    if (scanned >= MAX_SWEEP_PER_CALL) break;
+    scanned += 1;
+    const active = timestamps.filter((ts) => ts > cutoff);
+    if (active.length === 0) {
+      failures.delete(ip);
+    } else if (active.length !== timestamps.length) {
+      failures.set(ip, active);
+    }
+  }
+}
+
+function recordFailure(ip, currentNow) {
+  const cutoff = currentNow - LOCKOUT_WINDOW_MS;
+  const active = (failures.get(ip) || []).filter((ts) => ts > cutoff);
+  active.push(currentNow);
+  failures.set(ip, active);
+  return active;
+}
+
+export function resetAuthFailures() {
+  failures.clear();
 }
 
 /**
- * Pure auth check. Returns { ok: true } on success, otherwise { ok:false, status, error }.
- * Does NOT write to the response.
+ * Pure admin authentication check.
+ * Never touches res.
+ * @param {import('node:http').IncomingMessage} req
+ * @param {{ now?: () => number }} [opts]
+ * @returns {Promise<{ ok: true } | { ok: false, status: number, error: { error: string }, headers?: Record<string, string> }>}
  */
-export async function checkAdminAuth(req) {
+export async function checkAdminAuth(req, { now = Date.now } = {}) {
+  const currentNow = now();
+  sweepOldEntries(currentNow);
+
+  const ip = clientIp(req);
   const token = getAdminToken();
-  const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString();
-  clean(ip);
-  const rec = failures.get(ip) || { count: 0, first: now() };
 
   // Missing or short token configuration – fail closed.
   if (!token) {
@@ -45,36 +70,42 @@ export async function checkAdminAuth(req) {
     return { ok: false, status: 503, error: { error: 'Admin API not configured' } };
   }
 
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    rec.count++;
-    failures.set(ip, rec);
-    if (rec.count >= LOCKOUT_LIMIT) {
-      await auditLog({ type: 'admin_auth_failure', ip, reason: 'missing' });
-      return { ok: false, status: 429, error: { error: 'Too many failed auth attempts' } };
-    }
+  // LOCK FIRST: check existing failure count BEFORE inspecting the token.
+  const cutoff = currentNow - LOCKOUT_WINDOW_MS;
+  const active = (failures.get(ip) || []).filter((ts) => ts > cutoff);
+  if (active.length > 0) {
+    failures.set(ip, active);
+  } else {
+    failures.delete(ip);
+  }
+
+  if (active.length >= LOCKOUT_LIMIT) {
+    const retryAfterSec = Math.max(1, Math.ceil((active[0] + LOCKOUT_WINDOW_MS - currentNow) / 1000));
+    await auditLog({ type: 'admin_auth_locked', ip });
+    return {
+      ok: false,
+      status: 429,
+      headers: { 'Retry-After': String(retryAfterSec) },
+      error: { error: 'Too many failed auth attempts' },
+    };
+  }
+
+  const authHeader = req?.headers?.authorization;
+  if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+    recordFailure(ip, currentNow);
     await auditLog({ type: 'admin_auth_failure', ip, reason: 'missing' });
     return { ok: false, status: 401, error: { error: 'Missing or invalid Authorization header' } };
   }
 
   const provided = authHeader.slice('Bearer '.length).trim();
-  const expected = Buffer.from(token, 'utf8');
-  const providedBuf = Buffer.from(provided, 'utf8');
-  const match = expected.length === providedBuf.length && crypto.timingSafeEqual(expected, providedBuf);
+  const match = crypto.timingSafeEqual(sha256(token), sha256(provided));
   if (!match) {
-    rec.count++;
-    failures.set(ip, rec);
-    if (rec.count >= LOCKOUT_LIMIT) {
-      await auditLog({ type: 'admin_auth_failure', ip, reason: 'invalid' });
-      return { ok: false, status: 429, error: { error: 'Too many failed auth attempts' } };
-    }
+    recordFailure(ip, currentNow);
     await auditLog({ type: 'admin_auth_failure', ip, reason: 'invalid' });
     return { ok: false, status: 401, error: { error: 'Invalid admin token' } };
   }
 
-  // Successful auth – clear failures for ip.
+  // Successful auth (only reached when IP is not locked) – clear failure record.
   failures.delete(ip);
   return { ok: true };
 }
-
-export const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';

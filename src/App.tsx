@@ -6,6 +6,7 @@ import Landing from './pages/Landing';
 import Historical from './pages/Historical';
 import LiveAlerts from './pages/LiveAlerts';
 import Earthquakes from './pages/Earthquakes';
+import Subscribe from './pages/Subscribe';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/historical" element={<Historical />} />
         <Route path="/live-alerts" element={<LiveAlerts />} />
         <Route path="/earthquakes" element={<Earthquakes />} />
+        <Route path="/subscribe" element={<Subscribe />} />
         {/* 404 fallback redirect to "/" */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

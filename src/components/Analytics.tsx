@@ -10,13 +10,16 @@ function BarRows({ data, color }: { data: [string, number][]; color: string }) {
   const max = Math.max(1, ...data.map((d) => d[1]));
   return (
     <div>
-      {data.map(([label, value]) => (
-        <div className="bar-row" key={label}>
-          <span className="bl" title={label}>{label}</span>
-          <span className="bar-track"><span className="bar-fill" style={{ width: `${(value / max) * 100}%`, background: color }} /></span>
-          <span className="bv">{value}</span>
-        </div>
-      ))}
+      {data.map(([label, value]) => {
+        const widthPct = value > 0 ? Math.max(3, (value / max) * 100) : 0;
+        return (
+          <div className="bar-row" key={label}>
+            <span className="bl" title={label}>{label}</span>
+            <span className="bar-track"><span className="bar-fill" style={{ width: `${widthPct}%`, background: color }} /></span>
+            <span className="bv">{value}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -63,7 +66,7 @@ export default function Analytics({ events, scopeLabel }: Props) {
         <div className="section-head">
           <span className="eyebrow">National Disaster Analytics</span>
           <h2 className="section-title">Understanding India's Water Disaster Patterns</h2>
-          <p className="section-sub">Frequency, distribution and category mix across the catalogued records. Scope: <b>{scopeLabel}</b>. Rankings appear only where the filtered dataset has enough records.</p>
+          <p className="section-sub">Frequency, distribution and category mix across the active filter (default 10-year window). Scope: <b>{scopeLabel}</b>. Rankings appear only where the filtered dataset has enough records.</p>
         </div>
 
         <div className="mini-stat-grid">

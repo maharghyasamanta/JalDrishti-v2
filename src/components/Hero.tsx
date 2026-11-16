@@ -40,7 +40,7 @@ export default function Hero({ stats }: { stats: HeroStats }) {
           <div className="stat">
             <div className="stat-value">{stats.totalEvents}</div>
             <div className="stat-label">Events catalogued</div>
-            <div className="stat-sub">{stats.documentedEvents} documented / reported · rest demo</div>
+            <div className="stat-sub">All catalogued records · {stats.documentedEvents} documented / reported</div>
           </div>
           <div className="stat">
             <div className="stat-value">{stats.statesCovered}<span className="unit"> / 36</span></div>

@@ -4,8 +4,10 @@ A Vite + React 18 + TypeScript + D3 disaster intelligence platform: an interacti
 
 ```bash
 npm install
-npm run dev      # frontend on http://localhost:5175 (or 5173)
+npm run dev      # backend + Vite dev middleware on http://127.0.0.1:3000
+npm run dev:vite # optional standalone Vite on http://localhost:5173 (proxies /api -> :3000)
 npm run build    # type-check + production build into dist/
+npm start        # production server serving dist/ + /api on http://127.0.0.1:3000
 ```
 
 ## Application Route Structure
@@ -39,28 +41,34 @@ JalDrishti uses `HashRouter` (`/#/...`) for static hosting compatibility without
 
 ## Live alerts & earthquake server
 
-Browsers cannot call NDMA's SACHET feed or NCS directly due to CORS restrictions. A lightweight Node 18+ service in `server/` caches and serves both:
+Browsers cannot call NDMA's SACHET feed or NCS directly due to CORS restrictions. A zero-dependency Node 18+ service in `server/` caches and serves both:
 
 - **`/api/alerts`**: Fetches SACHET RSS & CAP feeds, resolves state attributions, caches alerts.
 - **`/api/earthquakes`**: Scrapes National Center for Seismology (NCS) live data with USGS FDSN fallback.
 
-No external databases needed: vanilla Node.js.
+No external databases needed: vanilla Node.js. On startup (`start()`), `.env` at the project root is automatically loaded without overriding existing environment variables.
 
 ### Run it locally
 
 ```bash
-npm run server         # http://127.0.0.1:8787 (serves /api/alerts and /api/earthquakes)
-npm run dev            # in another terminal; Vite proxies /api to the server
+npm run dev            # http://127.0.0.1:3000 (serves frontend + /api/alerts + /api/earthquakes)
+npm run dev:vite       # optional standalone Vite on :5173 proxying /api to :3000
+npm start              # production mode (--production) serving dist/ + /api
 npm run test:server    # unit tests (Node's built-in test runner)
 ```
 
-Server environment variables (all optional):
+Server environment variables (see `.env.example`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PORT` | `8787` | Listening port |
+| `PORT` | `3000` | Listening port |
 | `HOST` | `127.0.0.1` | Bind address (use `0.0.0.0` in a container) |
-| `CORS_ORIGIN` | `*` | Value of `Access-Control-Allow-Origin` |
+| `ADMIN_TOKEN` | _(unset)_ | Admin Bearer token (>= 24 chars; admin routes return 503 when unset/short) |
+| `CORS_ORIGIN` | _(unset)_ | Comma-separated origins for non-public routes; public GET uses `*` when unset |
+| `TRUST_PROXY` | `false` | Set to `true` to read client IP from `X-Forwarded-For` |
+| `SMS_PROVIDER` | `mock` | SMS provider (`mock` default) |
+| `AUTO_DISPATCH_MODE` | `off` | Auto dispatch mode (`off` default) |
+| `SMS_DATA_DIR` | `server/data` | Override JSON store directory |
 | `SACHET_USER_AGENT` | built-in | Override the `User-Agent` sent to NDMA |
 | `ALERT_SCOPE` | `all` | Set to `water` to keep only water hazards |
 | `DISTRICT_INDEX_PATH` | `public/data/india-districts-index.json` | District → states index |

@@ -1,46 +1,106 @@
-// Body parser for our zero‑dependency server.
-// Parses JSON bodies up to 16 KB.
-// Returns an object { ok: boolean, data?: any, error?: { status, body } }
+// Body parser for our zero-dependency server.
+// Parses plain JSON objects up to 16 KB.
+// Returns { ok: true, data } or { ok: false, error: { status, body, closeConnection? } }.
 
-import { readFile, writeFile } from 'node:fs/promises';
-
-const MAX_SIZE = 16 * 1024; // 16 KB
+const MAX_SIZE = 16 * 1024; // 16 KB
 
 export async function parseBody(req) {
+  // Case-insensitive Content-Type check BEFORE waiting for the body.
+  const rawCt = req?.headers?.['content-type'];
+  const contentType = typeof rawCt === 'string' ? rawCt.split(';')[0].trim().toLowerCase() : '';
+  if (contentType !== 'application/json') {
+    return {
+      ok: false,
+      error: { status: 415, body: { error: 'Unsupported Media Type' } },
+    };
+  }
+
+  // Check Content-Length up front before reading stream.
+  const clHeader = req?.headers?.['content-length'];
+  if (clHeader !== undefined) {
+    const contentLength = Number(clHeader);
+    if (Number.isFinite(contentLength) && contentLength > MAX_SIZE) {
+      req.resume?.();
+      return {
+        ok: false,
+        error: {
+          status: 413,
+          body: { error: 'Payload Too Large' },
+          closeConnection: true,
+        },
+      };
+    }
+  }
+
   return new Promise((resolve) => {
     const chunks = [];
     let received = 0;
+    let tooLarge = false;
+    let settled = false;
+
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    }
+
     req.on('data', (chunk) => {
-      received += chunk.length;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      received += buf.length;
       if (received > MAX_SIZE) {
-        // Too large – abort reading
-        req.destroy();
-        resolve({ ok: false, error: { status: 413, body: { error: 'Payload Too Large' } } });
-      } else {
-        chunks.push(chunk);
+        if (!tooLarge) {
+          tooLarge = true;
+          chunks.length = 0;
+        }
+        return; // Drain stream without calling req.destroy().
+      }
+      if (!tooLarge) {
+        chunks.push(buf);
       }
     });
+
     req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf8');
-      const contentType = req.headers['content-type']?.split(';')[0];
-      if (contentType !== 'application/json') {
-        resolve({ ok: false, error: { status: 415, body: { error: 'Unsupported Media Type' } } });
+      if (tooLarge) {
+        finish({
+          ok: false,
+          error: {
+            status: 413,
+            body: { error: 'Payload Too Large' },
+            closeConnection: true,
+          },
+        });
         return;
       }
+
+      const raw = Buffer.concat(chunks).toString('utf8').trim();
       if (!raw) {
-        // Empty body -> treat as {}
-        resolve({ ok: true, data: {} });
+        finish({ ok: true, data: {} });
         return;
       }
+
       try {
         const data = JSON.parse(raw);
-        resolve({ ok: true, data });
-      } catch (_) {
-        resolve({ ok: false, error: { status: 400, body: { error: 'Invalid JSON' } } });
+        if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+          finish({
+            ok: false,
+            error: { status: 400, body: { error: 'JSON body must be a plain object' } },
+          });
+          return;
+        }
+        finish({ ok: true, data });
+      } catch {
+        finish({
+          ok: false,
+          error: { status: 400, body: { error: 'Invalid JSON' } },
+        });
       }
     });
+
     req.on('error', () => {
-      resolve({ ok: false, error: { status: 400, body: { error: 'Bad Request' } } });
+      finish({
+        ok: false,
+        error: { status: 400, body: { error: 'Bad Request' } },
+      });
     });
   });
 }

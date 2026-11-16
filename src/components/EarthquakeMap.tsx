@@ -121,9 +121,32 @@ export default function EarthquakeMap() {
 
   const filtered = useMemo(() => {
     if (!data) return [];
-    if (magFilter === 'all') return data.quakes;
-    return data.quakes.filter((q) => magCategory(q.magnitude) === magFilter);
+    const seen = new Set<string>();
+    const list = magFilter === 'all'
+      ? data.quakes
+      : data.quakes.filter((q) => magCategory(q.magnitude) === magFilter);
+    return list.filter((q) => {
+      if (seen.has(q.id)) return false;
+      seen.add(q.id);
+      return true;
+    });
   }, [data, magFilter]);
+
+  const filteredStats = useMemo(() => {
+    const count = filtered.length;
+    if (count === 0) return { totalCount: 0, maxMagnitude: '—', avgMagnitude: '—' };
+    let max = -Infinity;
+    let sum = 0;
+    for (const q of filtered) {
+      if (q.magnitude > max) max = q.magnitude;
+      sum += q.magnitude;
+    }
+    return {
+      totalCount: count,
+      maxMagnitude: max.toFixed(1),
+      avgMagnitude: (sum / count).toFixed(1),
+    };
+  }, [filtered]);
 
   const features = geo.data?.features ?? [];
   const mainland = useMemo(() => features.filter((f) => !ISLAND_NAMES.includes(f.properties.st_nm)), [features]);
@@ -161,20 +184,11 @@ export default function EarthquakeMap() {
   return (
     <section className="eq-section" id="earthquakes">
       <div className="container">
-        <div className="section-head">
-          <span className="eyebrow">Seismic Activity</span>
-          <h2 className="section-title">Earthquake Map — Last 30 Days</h2>
-          <p className="section-sub">
-            Real-time earthquake data from India's seismic zone network, sourced from NCS (riseq.seismo.gov.in).
-            States are colored by seismic zone (II–V). Circle size indicates magnitude.
-          </p>
-        </div>
-
         {hasData && (
           <div className="eq-stats">
-            <div className="eq-stat"><div className="v">{data!.totalCount}</div><div className="l">Total Quakes</div></div>
-            <div className="eq-stat"><div className="v" style={{ color: '#c02020' }}>{data!.maxMagnitude}</div><div className="l">Max Magnitude</div></div>
-            <div className="eq-stat"><div className="v">{data!.avgMagnitude}</div><div className="l">Avg Magnitude</div></div>
+            <div className="eq-stat"><div className="v">{filteredStats.totalCount}</div><div className="l">Total Quakes</div></div>
+            <div className="eq-stat"><div className="v" style={{ color: '#c02020' }}>{filteredStats.maxMagnitude}</div><div className="l">Max Magnitude</div></div>
+            <div className="eq-stat"><div className="v">{filteredStats.avgMagnitude}</div><div className="l">Avg Magnitude</div></div>
             <div className="eq-stat"><div className="v">{data!.source}</div><div className="l">Data Source</div></div>
           </div>
         )}
@@ -384,25 +398,34 @@ export default function EarthquakeMap() {
                     <div className="t1">🌍 Seismic Activity · Last 30 Days</div>
                     <div className="t2">{data ? `Source: ${data.source} · ${filtered.length} events` : 'Loading...'}</div>
                   </div>
-
-                  {/* Seismic zone legend */}
-                  <div className="eq-zone-legend">
-                    <div className="zl-head">Seismic Zones</div>
-                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.V }} />Zone V (Very High)</div>
-                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.IV }} />Zone IV (High)</div>
-                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.III }} />Zone III (Moderate)</div>
-                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.II }} />Zone II (Low)</div>
-                    <div className="zl-head" style={{ marginTop: 6 }}>Magnitude</div>
-                    {MAG_CATEGORIES.map((cat) => (
-                      <div className="zl-item" key={cat}>
-                        <span className="zl-dot" style={{ background: NCS_MAG_COLOR[cat], width: 6 + (['minor','light','moderate','strong','major'].indexOf(cat)) * 3, height: 6 + (['minor','light','moderate','strong','major'].indexOf(cat)) * 3 }} />
-                        {MAG_NAMES[cat]} ({MAG_LABELS[cat]})
-                      </div>
-                    ))}
-                  </div>
                 </div>
               )}
             </div>
+
+            {/* Seismic zone & magnitude legend placed below the map so Northeast India is unobstructed */}
+            <div className="eq-zone-legend" aria-label="Seismic zone and magnitude legend">
+              <div className="zl-group">
+                <div className="zl-head">Seismic Zones</div>
+                <div className="zl-items">
+                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.V }} />Zone V (Very High)</div>
+                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.IV }} />Zone IV (High)</div>
+                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.III }} />Zone III (Moderate)</div>
+                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.II }} />Zone II (Low)</div>
+                </div>
+              </div>
+              <div className="zl-group">
+                <div className="zl-head">Magnitude</div>
+                <div className="zl-items">
+                  {MAG_CATEGORIES.map((cat, idx) => (
+                    <div className="zl-item" key={cat}>
+                      <span className="zl-dot" style={{ background: NCS_MAG_COLOR[cat], width: 6 + idx * 3, height: 6 + idx * 3 }} />
+                      {MAG_NAMES[cat]} ({MAG_LABELS[cat]})
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             <p className="eq-disclaimer">
               Seismic zone overlay is approximate (BIS IS 1893:2016). Earthquake data from{' '}
               <a href="https://riseq.seismo.gov.in" target="_blank" rel="noreferrer">NCS (riseq.seismo.gov.in)</a> /{' '}
