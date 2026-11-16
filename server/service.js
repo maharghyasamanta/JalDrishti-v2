@@ -3,8 +3,9 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseRss } from './rss.js';
-import { parseCap, selectActive, normalizeAlert } from './cap.js';
+import { parseCap, parsePolygonXml, selectActive, normalizeAlert } from './cap.js';
 import { stateAtPoint, nearestStateWithin } from './geo.js';
+import { resolveStates } from './states.js';
 
 export const RSS_URL = 'https://sachet.ndma.gov.in/cap_public_website/rss/rss_india.xml';
 export const CAP_URL = 'https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile';
@@ -84,6 +85,17 @@ export function createAlertsService({
       try {
         const url = `${CAP_URL}?identifier=${encodeURIComponent(it.guid)}`;
         const msg = parseCap(await fetchText(url), { id: it.guid, pubDate: it.pubDate, title: it.title, link: it.link || url });
+        if (msg.shapes.length === 0 && msg.polygonUrl) {
+          const textNeedsHelp = resolveStates(msg.areaDescs, districtIndex).states.length === 0;
+          if (msg.hazard === 'coastal' || textNeedsHelp) {
+            try {
+              const polyXml = await fetchText(msg.polygonUrl);
+              msg.shapes = parsePolygonXml(polyXml);
+            } catch (polyErr) {
+              log(`Polygon fetch skipped for ${it.guid}:`, polyErr.message);
+            }
+          }
+        }
         capCache.set(it.guid, msg);
       } catch (e) {
         failed += 1;

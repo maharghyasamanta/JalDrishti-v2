@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCap, selectActive, normalizeAlert, placeAlert } from './cap.js';
+import { parseCap, parsePolygonXml, selectActive, normalizeAlert, placeAlert } from './cap.js';
 import { stateAtPoint, nearestStateWithin } from './geo.js';
 import { STATE_CODES } from './states.js';
 
@@ -189,3 +189,51 @@ test('senderName state fallback yields placement "sender" and fails cleanly to "
   assert.deepEqual(noneRes.states, []);
   assert.equal(noneRes.unresolved, true);
 });
+
+test('real SACHET SDMA Alert with root <sender>, Polygon URL, and Telugu wave info classifies as coastal in Andhra Pradesh', () => {
+  const xml = `<?xml version="1.0"?>
+<cap:alert xmlns:cap="urn:oasis:names:tc:emergency:cap:1.2">
+  <cap:identifier>IN-1794805423229008_8</cap:identifier>
+  <cap:sender>Andhra-Pradesh-SDMA</cap:sender>
+  <cap:sent>2026-11-16T10:33:43+05:30</cap:sent>
+  <cap:status>Actual</cap:status>
+  <cap:msgType>Alert</cap:msgType>
+  <cap:info>
+    <cap:language>en-IN</cap:language>
+    <cap:category>Met</cap:category>
+    <cap:event>SDMA Alert</cap:event>
+    <cap:severity>Severe</cap:severity>
+    <cap:expires>2026-11-17T19:00:00+05:30</cap:expires>
+    <cap:headline>SDMA Alert is Likely to occur over Palmanpeta - Bhimumipatnam. Please follow SDMA guidelines.</cap:headline>
+    <cap:instruction>Please follow SDMA guidelines.</cap:instruction>
+    <cap:parameter><cap:valueName>Polygon URL</cap:valueName><cap:value>https://sachet.ndma.gov.in/cap_public_website/FetchPolygonXMLFile?identifier=1794805423229008</cap:value></cap:parameter>
+    <cap:area><cap:areaDesc>Palmanpeta - Bhimumipatnam</cap:areaDesc></cap:area>
+  </cap:info>
+  <cap:info>
+    <cap:language>TL</cap:language>
+    <cap:category>Met</cap:category>
+    <cap:event>SDMA Alert</cap:event>
+    <cap:headline>సముద్రంలో 1.3-1.4 మీటర్ల ఎత్తులో భారీఅలలు వచ్చే అవకాశం ఉంది. మత్స్యకారులు బీచ్ లకు వెళ్లవద్దు</cap:headline>
+  </cap:info>
+</cap:alert>`;
+  const polyXml = `<alert><identifier>IN-1794805423229008_8</identifier>
+    <polygon>17.888716,83.453271 17.743891,83.367577 17.537987,83.144188 17.888716,83.453271</polygon>
+    <polygon>17.888716,83.453271 17.743891,83.367577 17.537987,83.144188 17.888716,83.453271</polygon>
+  </alert>`;
+
+  const msg = parseCap(xml);
+  assert.equal(msg.hazard, 'coastal');
+  assert.equal(msg.waterRelated, true);
+  assert.equal(msg.polygonUrl, 'https://sachet.ndma.gov.in/cap_public_website/FetchPolygonXMLFile?identifier=1794805423229008');
+
+  msg.shapes = parsePolygonXml(polyXml);
+  assert.equal(msg.shapes.length, 1); // duplicate polygon deduped
+
+  const alert = normalizeAlert(msg, {}, geo);
+  assert.deepEqual(alert.states, ['Andhra Pradesh']);
+  assert.equal(alert.placement, 'polygon');
+  assert.equal(alert.sender, 'Andhra-Pradesh-SDMA');
+  assert.equal(alert.unresolved, false);
+  assert.ok(!/[\u0C00-\u0C7F]/.test(JSON.stringify(alert)), 'no Telugu script in public alert');
+});
+

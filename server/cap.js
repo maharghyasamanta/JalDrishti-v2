@@ -39,6 +39,9 @@ const wordBounded = (patterns) =>
 
 const COASTAL_RE = wordBounded(COASTAL_HAZARD_KEYWORDS);
 const WATER_RE = wordBounded(WATER_HAZARD_KEYWORDS);
+// Used strictly for internal hazard classification when English <info> uses generic "SDMA Alert"; text is never stored or displayed.
+const REGIONAL_COASTAL_RE = /(?:సముద్ర|అలలు|మత్స్యకారులు|బీచ్|తీర|लहर|मछुआर|तट|मच्छीमार|सागर|அலை|கடல்|மீனவ|തിരമാല|കടൽ|മത്സ്യ|ಅಲೆ|ಸಮುದ್ರ|ಮೀನುಗಾರ|મોજા|દરિયા|માછીમાર|ঢেউ|সমুদ্র|মৎস্যজীবী|ଅଶାନ୍ତ|ସମୁଦ୍ର|ମତ୍ସ୍ୟଜୀବୀ)/u;
+const SACHET_POLYGON_URL_RE = /^https:\/\/sachet\.ndma\.gov\.in\/cap_public_website\/FetchPolygonXMLFile\?[^\s<>]+$/i;
 
 /** Other hazard groups, checked in strict precedence: coastal -> water -> storm -> heat -> cold -> other. */
 export const HAZARD_GROUPS = {
@@ -137,16 +140,28 @@ function shapeVertexCount(shape) {
   return shape.kind === 'polygon' ? shape.coords.length : 1;
 }
 
+function shapeDedupKey(shape) {
+  if (shape.kind === 'circle') return `c:${shape.lat}:${shape.lon}:${shape.radiusKm}`;
+  return `p:${shape.coords.map((pt) => `${pt[0]},${pt[1]}`).join(';')}`;
+}
+
 export function parseShapesFromAreas(areas) {
   const shapes = [];
+  const seen = new Set();
+  const pushUnique = (shape) => {
+    if (!shape) return;
+    const key = shapeDedupKey(shape);
+    if (seen.has(key)) return;
+    seen.add(key);
+    shapes.push(shape);
+  };
+
   for (const area of areas) {
     for (const polyNode of childrenOf(area, 'polygon')) {
-      const poly = parsePolygonText(polyNode.text);
-      if (poly) shapes.push(poly);
+      pushUnique(parsePolygonText(polyNode.text));
     }
     for (const circleNode of childrenOf(area, 'circle')) {
-      const circle = parseCircleText(circleNode.text);
-      if (circle) shapes.push(circle);
+      pushUnique(parseCircleText(circleNode.text));
     }
   }
 
@@ -170,6 +185,11 @@ export function parseShapesFromAreas(areas) {
   }
 
   return capped;
+}
+
+export function parsePolygonXml(xml) {
+  const root = parseXml(xml);
+  return parseShapesFromAreas([root]);
 }
 
 function polygonCentroid(coords) {
@@ -252,7 +272,8 @@ export function parseCap(xml, rss = {}) {
   const root = parseXml(xml);
   if (root.name !== 'alert') throw new Error(`Not a CAP alert (root <${root.name}>)`);
 
-  const { info, english } = chooseInfo(childrenOf(root, 'info'));
+  const allInfos = childrenOf(root, 'info');
+  const { info, english } = chooseInfo(allInfos);
   const sentDate = validDate(textOf(root, 'sent')) ?? validDate(rss.pubDate);
   const expiresDate = info ? validDate(textOf(info, 'expires')) : null;
 
@@ -262,6 +283,12 @@ export function parseCap(xml, rss = {}) {
     name: textOf(g, 'valueName'), value: textOf(g, 'value'),
   }))).filter((c) => c.value);
   const shapes = parseShapesFromAreas(areas);
+  const paramPoly = info
+    ? childrenOf(info, 'parameter')
+        .find((p) => textOf(p, 'valueName').trim().toLowerCase() === 'polygon url')
+    : null;
+  const rawPolyUrl = paramPoly ? textOf(paramPoly, 'value').trim() : '';
+  const polygonUrl = SACHET_POLYGON_URL_RE.test(rawPolyUrl) ? rawPolyUrl : null;
 
   const sev = info ? textOf(info, 'severity') : '';
   const severity = SEVERITIES.find((s) => s.toLowerCase() === sev.toLowerCase()) ?? 'Unknown';
@@ -280,11 +307,18 @@ export function parseCap(xml, rss = {}) {
   if (hazard === 'other' && (description || instruction)) {
     hazard = classifyHazard([description, instruction]);
   }
+  if (hazard === 'other') {
+    const regionalHit = allInfos.some((inf) =>
+      REGIONAL_COASTAL_RE.test(`${textOf(inf, 'event')} ${textOf(inf, 'headline')} ${textOf(inf, 'description')}`));
+    if (regionalHit) hazard = 'coastal';
+  }
 
   const primaryWaterOrCoastal = haystack.some((h) => h && (COASTAL_RE.test(h) || WATER_RE.test(h)));
   const waterRelated = primaryWaterOrCoastal || hazard === 'coastal' || hazard === 'water';
 
   const msgType = (textOf(root, 'msgType') || 'Alert').toLowerCase();
+  const rootSenderRaw = latinOnly(textOf(root, 'sender'));
+  const rootSender = rootSenderRaw && !rootSenderRaw.includes('@') ? rootSenderRaw : null;
 
   return {
     id: textOf(root, 'identifier') || rss.id || '',
@@ -301,9 +335,11 @@ export function parseCap(xml, rss = {}) {
     description,
     instruction,
     senderName: info ? latinOnly(textOf(info, 'senderName')) || null : null,
+    rootSender,
     areaDescs: english ? areaDescs : [],   // non-English area text is never kept
     areaCodes,
     shapes,
+    polygonUrl,
     waterRelated,
     hazard,
     link: rss.link || '',
@@ -412,8 +448,9 @@ export function placeAlert(msg, districtIndex, geo) {
     }
   }
 
-  if (msg.senderName) {
-    const senderRes = findStateNames(msg.senderName);
+  const senderForPlace = msg.senderName || msg.rootSender;
+  if (senderForPlace) {
+    const senderRes = findStateNames(senderForPlace);
     if (senderRes.states.length > 0) {
       return {
         states: [...senderRes.states].sort(),
@@ -451,7 +488,7 @@ export function normalizeAlert(msg, districtIndex, geo) {
     placement: res.placement,
     unresolved: res.unresolved,
     unresolvedAreas: res.unresolvedAreas,
-    sender: msg.senderName,
+    sender: msg.senderName || msg.rootSender || null,
     sent: msg.sent,
     expires: msg.expires,
     msgType: msg.msgType,

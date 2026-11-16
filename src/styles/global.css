@@ -1251,6 +1251,23 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--muted);
   font-weight: 600;
 }
+.lm-demo-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.45px;
+  text-transform: uppercase;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  vertical-align: middle;
+}
+.lm-tooltip .lm-demo-badge {
+  margin-right: 6px;
+}
 
 @media (max-width: 560px) {
   .live-map-wrap {

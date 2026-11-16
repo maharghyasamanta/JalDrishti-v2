@@ -75,7 +75,7 @@ const ALIASES = {
 };
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const norm = (s) => s.replace(/&/g, ' and ').replace(/\s+/g, ' ');
+const norm = (s) => s.replace(/&/g, ' and ').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
 
 /** Build one alternation regex, longest names first, whole-word, case-insensitive. */
 function buildMatcher(names) {

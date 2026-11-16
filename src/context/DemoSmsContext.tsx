@@ -18,6 +18,7 @@ import {
 } from '../lib/sachet';
 import {
   CHANGE_EVENT,
+  STORAGE_KEY as SUBSCRIPTIONS_STORAGE_KEY,
   loadSubscriptions,
   type Subscription,
 } from '../lib/subscriptions';
@@ -348,7 +349,7 @@ export function DemoSmsProvider({ children }: { children: ReactNode }) {
     };
 
     const onStorage = (e: StorageEvent) => {
-      if (e.key === null || e.key === 'jaldrishti:demo:subscriptions:v2') {
+      if (e.key === null || e.key === SUBSCRIPTIONS_STORAGE_KEY) {
         onSubChange();
       } else if (e.key === 'jaldrishti:demo:outbox:v1') {
         setOutboxState(loadOutbox());

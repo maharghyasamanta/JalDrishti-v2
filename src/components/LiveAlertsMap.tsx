@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
+import { useLocation, Link } from 'react-router-dom';
 import { geoArea, geoMercator, geoPath } from 'd3';
 import type { GeoProjection } from 'd3';
 import type { Feature, Polygon } from 'geojson';
@@ -7,7 +8,7 @@ import { useIndiaGeo } from '../hooks/useIndiaGeo';
 import { ISLAND_NAMES, VIEW_W, VIEW_H } from '../lib/geo';
 import { STATE_MAP } from '../data/states';
 import {
-  fetchSachetAlerts, compareAlerts, formatSent, formatUntil, buildByState, SEVERITY_COLOR, SEVERITY_RANK,
+  DEMO_COASTAL_ALERT, fetchSachetAlerts, compareAlerts, formatSent, formatUntil, buildByState, SEVERITY_COLOR, SEVERITY_RANK,
   HAZARD_ORDER, HAZARD_LABEL, HAZARD_SHORT,
   type AlertPlacement, type AlertSeverity, type AlertShape, type HazardGroup, type SachetAlert, type SachetData,
 } from '../lib/sachet';
@@ -62,7 +63,7 @@ const STALE_AFTER_MS = 30 * 60 * 1000;
 const REFRESH_MS = 5 * 60 * 1000;
 const INITIAL_VISIBLE = 10;
 
-interface Hover { name: string; px: number; py: number; line: string; }
+interface Hover { name: string; px: number; py: number; line: string; isDemo?: boolean; }
 
 interface StateVisualSummary {
   landMax: AlertSeverity | null;
@@ -172,6 +173,11 @@ function alertTooltipLine(a: SachetAlert): string {
 
 export default function LiveAlertsMap() {
   const geo = useIndiaGeo();
+  const { search } = useLocation();
+  const isDemoCoastal = useMemo(
+    () => new URLSearchParams(search).get('demo') === 'coastal',
+    [search],
+  );
   const wrapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -224,16 +230,22 @@ export default function LiveAlertsMap() {
     return failed || !data.upstreamOk || age > STALE_AFTER_MS ? 'stale' : 'ok';
   }, [data, loaded, failed, now]);
 
+  const allAlerts = useMemo(() => {
+    const base = data?.alerts ?? [];
+    if (!isDemoCoastal) return base;
+    return base.some((a) => a.id === DEMO_COASTAL_ALERT.id) ? base : [DEMO_COASTAL_ALERT, ...base];
+  }, [data, isDemoCoastal]);
+
   const hazardCounts = useMemo(() => {
-    const c: Record<string, number> = { all: data?.alerts.length ?? 0 };
+    const c: Record<string, number> = { all: allAlerts.length };
     HAZARD_ORDER.forEach((h) => { c[h] = 0; });
-    data?.alerts.forEach((a) => { c[a.hazard] += 1; });
+    allAlerts.forEach((a) => { c[a.hazard] += 1; });
     return c;
-  }, [data]);
+  }, [allAlerts]);
 
   const shownAlerts = useMemo(
-    () => (data ? data.alerts.filter((a) => hazard === 'all' || a.hazard === hazard) : []),
-    [data, hazard],
+    () => allAlerts.filter((a) => hazard === 'all' || a.hazard === hazard),
+    [allAlerts, hazard],
   );
 
   const selectedAlert = useMemo(
@@ -355,8 +367,8 @@ export default function LiveAlertsMap() {
   }, [insets, projection, projectionForPoint]);
 
   const summaryFor = (name: string): string => {
-    if (status === 'loading') return 'Loading...';
-    if (status === 'error') return 'Alert data unavailable';
+    if (status === 'loading' && !isDemoCoastal) return 'Loading...';
+    if (status === 'error' && !isDemoCoastal) return 'Alert data unavailable';
     const sv = stateSummaries.get(name);
     if (!sv) {
       return status === 'ok' ? `No active ${hazardWord}alerts` : 'No alerts in the last data received (may be outdated)';
@@ -442,6 +454,8 @@ export default function LiveAlertsMap() {
   const visible = showAll ? listed : listed.slice(0, INITIAL_VISIBLE);
   const affected = byState.size;
   const hasData = status === 'ok' || status === 'stale';
+  const hasAlertsVisible = hasData || isDemoCoastal;
+  const showMapOverlays = (status !== 'loading' && status !== 'error') || isDemoCoastal;
 
   const updated = data?.generatedAt ? hhmm(data.generatedAt) : null;
   const staleBanner = status === 'stale'
@@ -453,11 +467,12 @@ export default function LiveAlertsMap() {
     const isStateSelected = selectedState === name;
     const isAlertTargetState = Boolean(selectedAlert && selectedAlert.states.includes(name));
     const hasLand = Boolean(sv?.landMax);
+    const isCoastalOnly = Boolean(!hasLand && sv && sv.coastalAlerts.length > 0 && sv.approxAlerts.length === 0);
     const isCoastalOrApproxOnly = Boolean(!hasLand && sv && sv.allMax);
     const maxSev = sv?.allMax ?? 'Unknown';
 
     let fill = MAP_THEME.land;
-    if (status !== 'loading' && status !== 'error') {
+    if (showMapOverlays) {
       if (hasLand && sv?.landMax) {
         fill = SEVERITY_COLOR[sv.landMax];
       } else if (isStateSelected && !sv) {
@@ -469,18 +484,20 @@ export default function LiveAlertsMap() {
     let strokeWidth = 0.7;
     let strokeDasharray: string | undefined;
 
-    if (isAlertTargetState && !hasLand) {
-      stroke = selectedAlert ? SEVERITY_COLOR[selectedAlert.severity] : MAP_THEME.selected;
-      strokeWidth = 2.4;
+    if (showMapOverlays && isAlertTargetState && !hasLand) {
+      stroke = selectedAlert?.hazard === 'coastal'
+        ? MAP_THEME.coastalSwatch
+        : (selectedAlert ? SEVERITY_COLOR[selectedAlert.severity] : MAP_THEME.selected);
+      strokeWidth = 2.5;
       strokeDasharray = '5 3';
-    } else if (isCoastalOrApproxOnly && sv?.allMax) {
-      stroke = SEVERITY_COLOR[sv.allMax];
+    } else if (showMapOverlays && isCoastalOrApproxOnly && sv?.allMax) {
+      stroke = isCoastalOnly ? MAP_THEME.coastalSwatch : SEVERITY_COLOR[sv.allMax];
       strokeWidth = isStateSelected ? 2.6 : 2;
       strokeDasharray = '5 3';
     } else if (isStateSelected) {
       stroke = MAP_THEME.selected;
       strokeWidth = 2.2;
-    } else if (hasLand && sv?.landMax) {
+    } else if (showMapOverlays && hasLand && sv?.landMax) {
       stroke = sv.landMax === 'Moderate' || sv.landMax === 'Minor'
         ? 'rgba(27, 36, 48, 0.58)'
         : MAP_THEME.alertBorder;
@@ -490,19 +507,28 @@ export default function LiveAlertsMap() {
     return { fill, stroke, strokeWidth, strokeDasharray, isStateSelected, maxSev };
   };
 
-  const stateProps = (name: string) => ({
-    tabIndex: 0,
-    role: 'button' as const,
-    'aria-label': `${name}. ${summaryFor(name)}`,
-    'aria-pressed': selectedState === name,
-    className: selectedState === name ? 'live-state selected' : 'live-state',
-    onClick: () => selectState(name),
-    onKeyDown: (e: ReactKeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectState(name); }
-    },
-    onMouseMove: (e: ReactMouseEvent) => { const { px, py } = relPos(e); setHover({ name, px, py, line: summaryFor(name) }); },
-    onMouseLeave: () => setHover(null),
-  });
+  const stateProps = (name: string) => {
+    const sv = stateSummaries.get(name);
+    const isDemoOnlyState = Boolean(
+      sv && sv.totalCount > 0 && !sv.landMax && sv.approxAlerts.length === 0 && sv.coastalAlerts.every((x) => x.isDemo),
+    );
+    return {
+      tabIndex: 0,
+      role: 'button' as const,
+      'aria-label': `${name}. ${summaryFor(name)}`,
+      'aria-pressed': selectedState === name,
+      className: selectedState === name ? 'live-state selected' : 'live-state',
+      onClick: () => selectState(name),
+      onKeyDown: (e: ReactKeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectState(name); }
+      },
+      onMouseMove: (e: ReactMouseEvent) => {
+        const { px, py } = relPos(e);
+        setHover({ name, px, py, line: summaryFor(name), isDemo: isDemoOnlyState });
+      },
+      onMouseLeave: () => setHover(null),
+    };
+  };
 
   // Track shape-less coastal alert offsets per state so stacked badges remain distinct
   const unshapedBadgeOffsetMap = useMemo(() => {
@@ -553,6 +579,7 @@ export default function LiveAlertsMap() {
         px,
         py,
         line: alertTooltipLine(a),
+        isDemo: a.isDemo,
       });
     },
     onFocus: (e: { currentTarget: Element }) => {
@@ -563,6 +590,7 @@ export default function LiveAlertsMap() {
           px: pos.px,
           py: pos.py,
           line: alertTooltipLine(a),
+          isDemo: a.isDemo,
         });
       }
     },
@@ -587,12 +615,20 @@ export default function LiveAlertsMap() {
 
         <div className="live-toolbar">
           <span className="live-updated">{hasData && updated ? `Last updated ${updated} IST` : ''}</span>
-          <button className="btn btn-outline btn-sm" onClick={load} disabled={refreshing}>
-            {refreshing ? 'Refreshing...' : 'Refresh data'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Link
+              className="btn btn-outline btn-sm"
+              to={isDemoCoastal ? '/live-alerts' : '/live-alerts?demo=coastal'}
+            >
+              {isDemoCoastal ? 'Exit coastal demo' : 'Preview coastal demo'}
+            </Link>
+            <button className="btn btn-outline btn-sm" onClick={load} disabled={refreshing}>
+              {refreshing ? 'Refreshing...' : 'Refresh data'}
+            </button>
+          </div>
         </div>
 
-        {hasData && data && data.alerts.length > 0 && (
+        {hasAlertsVisible && allAlerts.length > 0 && (
           <div className="hazard-chips" role="group" aria-label="Filter alerts by hazard type">
             {(['all', ...HAZARD_ORDER] as const).map((h) => (
               hazardCounts[h] > 0 || h === 'all' || h === hazard ? (
@@ -728,8 +764,10 @@ export default function LiveAlertsMap() {
                           const isSelected = selectedAlertId === a.id;
                           const proj = projectionForAlert(a);
                           const shapePath = geoPath(proj);
-                          const color = SEVERITY_COLOR[a.severity];
-                          const strokeColor = isSelected ? MAP_THEME.selected : color;
+                          const color = a.hazard === 'coastal' ? MAP_THEME.coastalSwatch : SEVERITY_COLOR[a.severity];
+                          const strokeColor = isSelected
+                            ? (a.hazard === 'coastal' ? '#084c53' : MAP_THEME.selected)
+                            : color;
                           return (
                             <g key={`shapes-${a.id}`} className={`lm-shape${isSelected ? ' selected' : ''}`}>
                               {a.shapes.map((sh, idx) => {
@@ -741,7 +779,7 @@ export default function LiveAlertsMap() {
                                       key={`poly-${a.id}-${idx}`}
                                       d={d}
                                       fill={color}
-                                      fillOpacity={isSelected ? 0.34 : 0.22}
+                                      fillOpacity={isSelected ? 0.38 : 0.24}
                                       stroke={strokeColor}
                                       strokeWidth={isSelected ? 3 : 2}
                                       vectorEffect="non-scaling-stroke"
@@ -759,7 +797,7 @@ export default function LiveAlertsMap() {
                                     cy={center[1]}
                                     r={r}
                                     fill={color}
-                                    fillOpacity={isSelected ? 0.34 : 0.22}
+                                    fillOpacity={isSelected ? 0.38 : 0.24}
                                     stroke={strokeColor}
                                     strokeWidth={isSelected ? 3 : 2}
                                     vectorEffect="non-scaling-stroke"
@@ -778,11 +816,6 @@ export default function LiveAlertsMap() {
                           .filter((a) => a.hazard === 'coastal')
                           .map((a) => {
                             const isSelected = selectedAlertId === a.id;
-                            const color = SEVERITY_COLOR[a.severity];
-                            const waveInk =
-                              a.severity === 'Moderate' || a.severity === 'Minor' || a.severity === 'Unknown'
-                                ? MAP_THEME.darkOutline
-                                : color;
                             const proj = projectionForAlert(a);
 
                             const points: Array<{ x: number; y: number; approx: boolean }> = [];
@@ -810,26 +843,26 @@ export default function LiveAlertsMap() {
                                   <circle
                                     cx={0}
                                     cy={0}
-                                    r={18}
+                                    r={16.5}
                                     fill="none"
                                     stroke={MAP_THEME.selected}
-                                    strokeWidth={2}
+                                    strokeWidth={2.5}
                                   />
                                 )}
                                 <circle
                                   cx={0}
                                   cy={0}
-                                  r={13.5}
-                                  fill="#ffffff"
-                                  stroke={isSelected ? MAP_THEME.selected : color}
-                                  strokeWidth={isSelected ? 2.5 : 2}
+                                  r={12.5}
+                                  fill={MAP_THEME.coastalSwatch}
+                                  stroke={isSelected ? '#1b2430' : '#ffffff'}
+                                  strokeWidth={isSelected ? 2.2 : 1.8}
                                   strokeDasharray={pt.approx ? '3 2' : undefined}
                                 />
                                 <path
-                                  d="M -6.5 -2 Q -3.25 -5 0 -2 T 6.5 -2 M -6.5 2.5 Q -3.25 -0.5 0 2.5 T 6.5 2.5"
+                                  d="M -6 -2 Q -3 -4.75 0 -2 T 6 -2 M -6 2.25 Q -3 -0.5 0 2.25 T 6 2.25"
                                   fill="none"
-                                  stroke={waveInk}
-                                  strokeWidth={1.9}
+                                  stroke="#ffffff"
+                                  strokeWidth={1.85}
                                   strokeLinecap="round"
                                 />
                               </g>
@@ -840,7 +873,10 @@ export default function LiveAlertsMap() {
 
                     {hover && (
                       <div className="map-tooltip lm-tooltip" style={{ left: hover.px, top: hover.py }}>
-                        <div className="tt-name">{hover.name}</div>
+                        <div className="tt-name">
+                          {hover.isDemo && <span className="lm-demo-badge">DEMO</span>}
+                          {hover.name}
+                        </div>
                         <div className="tt-meta">{hover.line}</div>
                       </div>
                     )}
@@ -878,9 +914,9 @@ export default function LiveAlertsMap() {
               <div>
                 <div className="t1">{selectedState ? `Alerts: ${selectedState}` : hazard === 'all' ? 'Active CAP Alerts' : `Active ${HAZARD_LABEL[hazard]} Alerts`}</div>
                 <div className="t2">
-                  {status === 'loading' && 'Loading...'}
-                  {status === 'error' && 'Alert data unavailable'}
-                  {hasData && data && `${shownAlerts.length} alerts · ${affected} states/UTs · ${sortedUnresolved.length} not matched to a state${updated ? ` · ${updated} IST` : ''}`}
+                  {status === 'loading' && !isDemoCoastal && 'Loading...'}
+                  {status === 'error' && !isDemoCoastal && 'Alert data unavailable'}
+                  {hasAlertsVisible && `${shownAlerts.length} alerts · ${affected} states/UTs · ${sortedUnresolved.length} not matched to a state${updated ? ` · ${updated} IST` : ''}`}
                 </div>
               </div>
               {(selectedState || selectedAlertId) && (
@@ -894,10 +930,10 @@ export default function LiveAlertsMap() {
               )}
             </div>
 
-            {status === 'loading' && <div className="live-status">Loading...</div>}
-            {status === 'error' && <div className="live-status">Alert data unavailable.</div>}
+            {status === 'loading' && !isDemoCoastal && <div className="live-status">Loading...</div>}
+            {status === 'error' && !isDemoCoastal && <div className="live-status">Alert data unavailable.</div>}
 
-            {hasData && visible.map((a) => (
+            {hasAlertsVisible && visible.map((a) => (
               <AlertRow
                 key={a.id}
                 a={a}
@@ -909,23 +945,23 @@ export default function LiveAlertsMap() {
                 }}
               />
             ))}
-            {hasData && listed.length === 0 && !selectedState && data && shownAlerts.length === 0 && (
+            {hasAlertsVisible && listed.length === 0 && !selectedState && shownAlerts.length === 0 && (
               <div className="live-status">
                 {status === 'ok' ? `No active ${hazardWord}alerts in the feed right now.` : 'No alerts in the last data received (may be outdated).'}
               </div>
             )}
-            {hasData && selectedState && listed.length === 0 && (
+            {hasAlertsVisible && selectedState && listed.length === 0 && (
               <div className="live-status">
                 {status === 'ok' ? `No active ${hazardWord}alerts for ${selectedState} in the feed.` : `No alerts for ${selectedState} in the last data received (may be outdated).`}
               </div>
             )}
-            {hasData && listed.length > INITIAL_VISIBLE && (
+            {hasAlertsVisible && listed.length > INITIAL_VISIBLE && (
               <button className="btn btn-outline btn-sm" onClick={() => setShowAll((v) => !v)}>
                 {showAll ? 'Show fewer' : `Show all (${listed.length})`}
               </button>
             )}
 
-            {hasData && sortedUnresolved.length > 0 && (
+            {hasAlertsVisible && sortedUnresolved.length > 0 && (
               <div className="live-unresolved">
                 <div className="live-unresolved-head">Location not matched to a state ({sortedUnresolved.length})</div>
                 {sortedUnresolved.map((a) => (
@@ -1014,6 +1050,7 @@ function AlertRow({
         <span className="al-event">
           {a.event}
           <span className={`hz-tag hz-${a.hazard}`}>{HAZARD_SHORT[a.hazard]}</span>
+          {a.isDemo && <span className="lm-demo-badge">DEMO</span>}
         </span>
         {a.detailsInOriginal ? (
           <span className="al-area">

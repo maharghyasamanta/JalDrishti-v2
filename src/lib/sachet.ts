@@ -32,6 +32,8 @@ export const HAZARD_SHORT: Record<HazardGroup, string> = {
 
 export interface SachetAlert {
   id: string;
+  isDemo?: boolean;
+  waterRelated?: boolean;
   headline: string;
   event: string;
   hazard: HazardGroup;
@@ -50,6 +52,41 @@ export interface SachetAlert {
   detailsInOriginal: boolean;
   link: string;
 }
+
+/** Client-only demo alert rendered exclusively on /#/live-alerts?demo=coastal (never from /api/alerts). */
+export const DEMO_COASTAL_ALERT: SachetAlert = {
+  id: 'demo-coastal-ap-bhimunipatnam',
+  isDemo: true,
+  waterRelated: true,
+  headline: 'High Waves — Palmanpeta - Bhimunipatnam (Visakhapatnam coast)',
+  event: 'High Waves',
+  hazard: 'coastal',
+  severity: 'Moderate',
+  description: 'Heavy waves of 1.3-1.4 m possible from 4:00 AM on 15 Nov to 7:00 AM on 17 Nov. People and fishermen should be alert and avoid the beaches.',
+  instruction: '',
+  areaDesc: 'Palmanpeta - Bhimunipatnam (Visakhapatnam coast)',
+  states: ['Andhra Pradesh'],
+  placement: 'polygon-coast',
+  shapes: [
+    {
+      kind: 'polygon',
+      coords: [
+        [17.64, 83.24],
+        [18.14, 83.74],
+        [17.98, 83.95],
+        [17.48, 83.45],
+        [17.64, 83.24],
+      ],
+    },
+  ],
+  unresolved: false,
+  unresolvedAreas: [],
+  sender: 'SACHET (Andhra Pradesh SDMA)',
+  sent: '2026-11-15T04:00:00+05:30',
+  expires: '2026-11-17T07:00:00+05:30',
+  detailsInOriginal: false,
+  link: '',
+};
 
 export interface AlertsResponse {
   generatedAt: string | null;
@@ -71,7 +108,7 @@ export const SEVERITY_COLOR: Record<AlertSeverity, string> = {
   Unknown: '#8DA3B8',
 };
 
-export const ALERTS_URL: string = import.meta.env.VITE_ALERTS_URL || '/api/alerts';
+export const ALERTS_URL: string = import.meta.env?.VITE_ALERTS_URL || '/api/alerts';
 
 export interface SachetData {
   alerts: SachetAlert[];
@@ -270,14 +307,16 @@ export function compareAlerts(a: SachetAlert, b: SachetAlert): number {
 }
 
 function formatIst(d: Date): string {
-  return `${d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })} IST`;
+  return `${d
+    .toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    .replace(/\b(am|pm)\b/i, (m) => m.toUpperCase())} IST`;
 }
 
 export function formatSent(sent: string | null): string {
