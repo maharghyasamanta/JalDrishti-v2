@@ -10,8 +10,8 @@ import { resolveStates } from './states.js';
 export const RSS_URL = 'https://sachet.ndma.gov.in/cap_public_website/rss/rss_india.xml';
 export const CAP_URL = 'https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile';
 export const REFRESH_MS = 10 * 60 * 1000;
-export const REQUEST_TIMEOUT_MS = 10_000;
-export const CONCURRENCY = 4;
+export const REQUEST_TIMEOUT_MS = 15_000;
+export const CONCURRENCY = 12;
 /** ALERT_SCOPE=water keeps only water hazards; anything else (default) keeps every hazard type. */
 export const WATER_ONLY = (process.env.ALERT_SCOPE || 'all').toLowerCase() === 'water';
 export const USER_AGENT = process.env.SACHET_USER_AGENT

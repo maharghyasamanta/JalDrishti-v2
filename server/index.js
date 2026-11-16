@@ -356,13 +356,25 @@ export function start() {
     log('Warning: ADMIN_TOKEN is missing or shorter than 24 characters — admin API disabled');
   }
 
+  const WARMUP_RETRY_MS = 15_000;
+  const startServiceWithWarmupRetry = (svc) => {
+    const attempt = () =>
+      svc.refresh().then(() => {
+        if (!svc.getPayload()) {
+          const t = setTimeout(attempt, WARMUP_RETRY_MS);
+          t.unref?.();
+        }
+      });
+    void attempt();
+  };
+
   const alertsService = createAlertsService({ districtIndex: loadDistrictIndex(), log });
-  alertsService.refresh();
+  startServiceWithWarmupRetry(alertsService);
   const alertsTimer = setInterval(() => alertsService.refresh(), REFRESH_MS);
   alertsTimer.unref?.();
 
   const earthquakeService = createEarthquakeService({ log });
-  earthquakeService.refresh();
+  startServiceWithWarmupRetry(earthquakeService);
   const eqTimer = setInterval(() => earthquakeService.refresh(), EQ_REFRESH_MS);
   eqTimer.unref?.();
 

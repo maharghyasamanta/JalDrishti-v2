@@ -37,7 +37,7 @@ export interface EarthquakeData {
   quakes: Earthquake[];
 }
 
-export const EARTHQUAKES_URL: string = import.meta.env.VITE_EARTHQUAKES_URL || '/api/earthquakes';
+export const EARTHQUAKES_URL: string = import.meta.env?.VITE_EARTHQUAKES_URL || '/api/earthquakes';
 
 export const MAG_COLOR: Record<string, string> = {
   minor:    '#4fc3d0',  // < 3
@@ -88,9 +88,45 @@ export function relativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
-export async function fetchEarthquakes(signal?: AbortSignal): Promise<EarthquakeData> {
-  const res = await fetch(EARTHQUAKES_URL, { signal, headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`Earthquake server returned HTTP ${res.status}`);
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export async function fetchEarthquakes(
+  signal?: AbortSignal,
+  options?: { maxWarmupRetries?: number; warmupDelayMs?: number },
+): Promise<EarthquakeData> {
+  const maxRetries = options?.maxWarmupRetries ?? 10;
+  const baseDelayMs = options?.warmupDelayMs ?? 1500;
+
+  let res: Response | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    res = await fetch(EARTHQUAKES_URL, {
+      signal,
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
+      await waitForRetry(baseDelayMs, signal);
+      continue;
+    }
+    break;
+  }
+
+  if (!res || !res.ok) throw new Error(`Earthquake server returned HTTP ${res?.status ?? 'unknown'}`);
   const data: unknown = await res.json();
   if (!data || typeof data !== 'object' || !Array.isArray((data as { quakes?: unknown }).quakes)) {
     throw new Error('Unexpected response from earthquake API');

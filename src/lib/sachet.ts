@@ -278,9 +278,52 @@ function validate(raw: unknown): AlertsResponse {
   };
 }
 
-export async function fetchSachetAlerts(signal?: AbortSignal): Promise<SachetData> {
-  const res = await fetch(ALERTS_URL, { signal, headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`Alerts server returned HTTP ${res.status}`);
+export interface FetchWarmupOptions {
+  maxWarmupRetries?: number;
+  warmupDelayMs?: number;
+}
+
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export async function fetchSachetAlerts(
+  signal?: AbortSignal,
+  options?: FetchWarmupOptions,
+): Promise<SachetData> {
+  const maxRetries = options?.maxWarmupRetries ?? 10;
+  const baseDelayMs = options?.warmupDelayMs ?? 1500;
+
+  let res: Response | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    res = await fetch(ALERTS_URL, {
+      signal,
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
+      await waitForRetry(baseDelayMs, signal);
+      continue;
+    }
+    break;
+  }
+
+  if (!res || !res.ok) {
+    throw new Error(`Alerts server returned HTTP ${res?.status ?? 'unknown'}`);
+  }
   const data = validate(await res.json());
 
   return {

@@ -123,6 +123,12 @@ export default function SubscriptionRegistry() {
     };
   }, [loadAlerts]);
 
+  useEffect(() => {
+    if (!alertFailed) return;
+    const t = window.setTimeout(loadAlerts, 20_000);
+    return () => window.clearTimeout(t);
+  }, [alertFailed, loadAlerts]);
+
   const alertStatus: AlertFeedStatus = useMemo(() => {
     if (!alertData) return alertLoaded ? 'error' : 'loading';
     const age = alertData.generatedAt ? now - alertData.generatedAt.getTime() : Infinity;

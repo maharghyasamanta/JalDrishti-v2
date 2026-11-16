@@ -213,6 +213,12 @@ export default function LiveAlertsMap() {
   }, [load]);
 
   useEffect(() => {
+    if (!failed) return;
+    const t = window.setTimeout(load, 20_000);
+    return () => window.clearTimeout(t);
+  }, [failed, load]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSelectedAlertId(null);

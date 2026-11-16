@@ -37,6 +37,7 @@ import {
 } from '../lib/dispatch';
 
 const REFRESH_MS = 5 * 60 * 1000;
+const ERROR_RETRY_MS = 20 * 1000;
 
 export type DispatchStatus = 'idle' | 'running' | 'ok' | 'error';
 export type FeedStatus = 'loading' | 'ok' | 'error';
@@ -258,16 +259,20 @@ export function DemoSmsProvider({ children }: { children: ReactNode }) {
       saveSettings(next);
       setEnabledState(v);
       if (v) {
-        applyDispatch(
-          alertsRef.current,
-          quakesRef.current,
-          false,
-          alertsStatus === 'error',
-          quakesStatus === 'error',
-        );
+        if (alertsStatus === 'error' || quakesStatus === 'error') {
+          void fetchAndDispatch(false);
+        } else {
+          applyDispatch(
+            alertsRef.current,
+            quakesRef.current,
+            false,
+            false,
+            false,
+          );
+        }
       }
     },
-    [alertsStatus, applyDispatch, quakesStatus],
+    [alertsStatus, applyDispatch, fetchAndDispatch, quakesStatus],
   );
 
   const setMode = useCallback(
@@ -330,6 +335,16 @@ export function DemoSmsProvider({ children }: { children: ReactNode }) {
       abortRef.current?.abort();
     };
   }, [fetchAndDispatch]);
+
+  // Auto-recover quickly if either feed failed (e.g. cold-start upstream blip)
+  useEffect(() => {
+    if (status === 'running') return;
+    if (alertsStatus !== 'error' && quakesStatus !== 'error') return;
+    const retryTimer = window.setTimeout(() => {
+      void fetchAndDispatch(false);
+    }, ERROR_RETRY_MS);
+    return () => window.clearTimeout(retryTimer);
+  }, [alertsStatus, quakesStatus, status, fetchAndDispatch]);
 
   // React to subscription registry / localStorage updates immediately
   useEffect(() => {
