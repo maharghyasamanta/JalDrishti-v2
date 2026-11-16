@@ -1,4 +1,23 @@
-import type { HazardGroup } from './sachet';
+import {
+  HAZARD_LABEL,
+  HAZARD_ORDER,
+  HAZARD_SHORT,
+  type HazardGroup,
+} from './sachet';
+
+export type SubHazard = HazardGroup | 'earthquake';
+
+export const SUB_HAZARD_ORDER: SubHazard[] = [...HAZARD_ORDER, 'earthquake'];
+
+export const SUB_HAZARD_LABEL: Record<SubHazard, string> = {
+  ...HAZARD_LABEL,
+  earthquake: 'Earthquake',
+};
+
+export const SUB_HAZARD_SHORT: Record<SubHazard, string> = {
+  ...HAZARD_SHORT,
+  earthquake: 'Quake',
+};
 
 export type SubStatus = 'Verified' | 'Pending' | 'Unsubscribed';
 
@@ -15,7 +34,7 @@ export interface Subscription {
   state: string;
   district?: string;
   locality?: string;
-  hazards: HazardGroup[];
+  hazards: SubHazard[];
   status: SubStatus;
   subscribedDate: string;
   verifiedDate?: string;
@@ -35,7 +54,7 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     state: 'Assam',
     district: 'Kamrup Metropolitan',
     locality: 'Guwahati',
-    hazards: ['water', 'storm'],
+    hazards: ['water', 'storm', 'earthquake'],
     status: 'Verified',
     subscribedDate: '2026-11-10',
     verifiedDate: '2026-11-10',
@@ -70,7 +89,7 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     state: 'Odisha',
     district: 'Khordha',
     locality: 'Bhubaneswar',
-    hazards: ['water', 'storm'],
+    hazards: ['water', 'storm', 'earthquake'],
     status: 'Verified',
     subscribedDate: '2026-11-11',
     verifiedDate: '2026-11-12',
@@ -101,6 +120,16 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
 
 function cloneList(list: Subscription[]): Subscription[] {
   return list.map((s) => ({ ...s, hazards: [...s.hazards] }));
+}
+
+function normalizeSubHazards(raw: unknown[]): SubHazard[] {
+  const seen = new Set<SubHazard>();
+  for (const entry of raw) {
+    if (typeof entry === 'string' && SUB_HAZARD_ORDER.includes(entry as SubHazard)) {
+      seen.add(entry as SubHazard);
+    }
+  }
+  return SUB_HAZARD_ORDER.filter((h) => seen.has(h));
 }
 
 export function todayStr(): string {
@@ -200,6 +229,18 @@ export function withStatus(sub: Subscription, status: SubStatus): Subscription {
   return { ...rest, status };
 }
 
+export function nextSubscriptionId(subs: Subscription[]): string {
+  let maxNum = 0;
+  for (const s of subs) {
+    const m = /^SUB-(\d+)$/.exec(s.id);
+    if (m) {
+      const n = Number.parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > maxNum) maxNum = n;
+    }
+  }
+  return `SUB-${String(maxNum + 1).padStart(3, '0')}`;
+}
+
 export function loadSubscriptions(): Subscription[] {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -214,10 +255,11 @@ export function loadSubscriptions(): Subscription[] {
         .filter(
           (
             item,
-          ): item is Omit<Subscription, 'pincode' | 'district' | 'locality'> & {
+          ): item is Omit<Subscription, 'pincode' | 'district' | 'locality' | 'hazards'> & {
             pincode?: unknown;
             district?: unknown;
             locality?: unknown;
+            hazards: unknown[];
           } =>
             Boolean(item) &&
             typeof item === 'object' &&
@@ -230,6 +272,7 @@ export function loadSubscriptions(): Subscription[] {
         )
         .map((item) => ({
           ...item,
+          hazards: normalizeSubHazards(item.hazards),
           pincode: typeof item.pincode === 'string' ? item.pincode : '',
           district: typeof item.district === 'string' && item.district.trim() ? item.district.trim() : undefined,
           locality: typeof item.locality === 'string' && item.locality.trim() ? item.locality.trim() : undefined,

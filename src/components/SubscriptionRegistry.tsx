@@ -1,19 +1,21 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { STATES } from '../data/states';
+import { useDemoSms } from '../context/DemoSmsContext';
+import { formatIstShort, getLastSmsBySubscriber } from '../lib/dispatch';
+import { magCategory, magColor, relativeTime, type Earthquake } from '../lib/earthquakes';
 import {
-  HAZARD_LABEL,
-  HAZARD_ORDER,
-  HAZARD_SHORT,
   SEVERITY_COLOR,
   compareAlerts,
   fetchSachetAlerts,
   formatSent,
-  type HazardGroup,
   type SachetAlert,
   type SachetData,
 } from '../lib/sachet';
 import {
   CHANGE_EVENT,
+  SUB_HAZARD_LABEL,
+  SUB_HAZARD_ORDER,
+  SUB_HAZARD_SHORT,
   SUB_STATUSES,
   formatPhone,
   loadSubscriptions,
@@ -25,6 +27,7 @@ import {
   saveSubscriptions,
   todayStr,
   withStatus,
+  type SubHazard,
   type SubStatus,
   type Subscription,
 } from '../lib/subscriptions';
@@ -70,23 +73,27 @@ function formatAreaSubline(sub: Subscription): string | null {
 }
 
 export default function SubscriptionRegistry() {
+  const { outbox, allIndiaQuakes, quakesStatus } = useDemoSms();
+
   const [subs, setSubs] = useState<Subscription[]>(() => loadSubscriptions());
   const [query, setQuery] = useState('');
   const [fState, setFState] = useState('ALL');
-  const [fHazard, setFHazard] = useState<'ALL' | HazardGroup>('ALL');
+  const [fHazard, setFHazard] = useState<'ALL' | SubHazard>('ALL');
   const [fStatus, setFStatus] = useState<'ALL' | SubStatus>('ALL');
   const [sort, setSort] = useState<SortMode>('date-desc');
 
   const [editing, setEditing] = useState<Subscription | null>(null);
   const [deleting, setDeleting] = useState<Subscription | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<{ subId: string; hazard: HazardGroup } | null>(null);
+  const [expanded, setExpanded] = useState<{ subId: string; hazard: SubHazard } | null>(null);
 
   const [alertData, setAlertData] = useState<SachetData | null>(null);
   const [alertLoaded, setAlertLoaded] = useState(false);
   const [alertFailed, setAlertFailed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const alertAbortRef = useRef<AbortController | null>(null);
+
+  const lastSmsBySub = useMemo(() => getLastSmsBySubscriber(outbox), [outbox]);
 
   const loadAlerts = useCallback(() => {
     alertAbortRef.current?.abort();
@@ -196,14 +203,21 @@ export default function SubscriptionRegistry() {
     return list;
   }, [subs, query, fState, fHazard, fStatus, sort]);
 
-  const getMatchesFor = useCallback(
-    (sub: Subscription, hazard: HazardGroup): SachetAlert[] => {
+  const getAlertMatchesFor = useCallback(
+    (sub: Subscription, hazard: Exclude<SubHazard, 'earthquake'>): SachetAlert[] => {
       if (!alertData) return [];
       return alertData.alerts
         .filter((a) => a.hazard === hazard && a.states.includes(sub.state))
         .sort(compareAlerts);
     },
     [alertData],
+  );
+
+  const getQuakeMatchesFor = useCallback(
+    (sub: Subscription): Earthquake[] => {
+      return allIndiaQuakes.filter((q) => q.state === sub.state);
+    },
+    [allIndiaQuakes],
   );
 
   const hasFilters = query.trim() !== '' || fState !== 'ALL' || fHazard !== 'ALL' || fStatus !== 'ALL';
@@ -249,7 +263,7 @@ export default function SubscriptionRegistry() {
           s.state,
           s.district ?? '',
           s.locality ?? '',
-          s.hazards.map((h) => HAZARD_SHORT[h]).join('; '),
+          s.hazards.map((h) => SUB_HAZARD_SHORT[h]).join('; '),
           s.status,
           s.subscribedDate,
           s.verifiedDate ?? '',
@@ -279,7 +293,7 @@ export default function SubscriptionRegistry() {
     else setSort(kind);
   };
 
-  const toggleHazardPanel = (subId: string, hazard: HazardGroup) => {
+  const toggleHazardPanel = (subId: string, hazard: SubHazard) => {
     setExpanded((cur) => (cur && cur.subId === subId && cur.hazard === hazard ? null : { subId, hazard }));
   };
 
@@ -289,7 +303,7 @@ export default function SubscriptionRegistry() {
         <div>
           <h3 id="sr-heading">Subscription registry</h3>
           <p className="sr-sub">
-            Showing {visible.length} of {subs.length} subscriptions. Mobile numbers are masked in the table. Click a hazard pill to inspect active alert locations.
+            Showing {visible.length} of {subs.length} subscriptions. Mobile numbers are masked in the table. Click a hazard pill to inspect active alerts or state earthquakes.
           </p>
         </div>
         <div className="sr-head-actions">
@@ -341,11 +355,11 @@ export default function SubscriptionRegistry() {
         </div>
         <div className="field">
           <label htmlFor="sr-hazard">Hazard</label>
-          <select id="sr-hazard" value={fHazard} onChange={(e) => setFHazard(e.target.value as 'ALL' | HazardGroup)}>
+          <select id="sr-hazard" value={fHazard} onChange={(e) => setFHazard(e.target.value as 'ALL' | SubHazard)}>
             <option value="ALL">All hazards</option>
-            {HAZARD_ORDER.map((h) => (
+            {SUB_HAZARD_ORDER.map((h) => (
               <option key={h} value={h}>
-                {HAZARD_LABEL[h]}
+                {SUB_HAZARD_LABEL[h]}
               </option>
             ))}
           </select>
@@ -404,7 +418,9 @@ export default function SubscriptionRegistry() {
               const areaSubline = formatAreaSubline(s);
               const openHazard = expanded && expanded.subId === s.id && s.hazards.includes(expanded.hazard) ? expanded.hazard : null;
               const panelId = `sr-panel-${s.id}`;
-              const panelMatches = openHazard ? getMatchesFor(s, openHazard) : [];
+              const alertMatches = openHazard && openHazard !== 'earthquake' ? getAlertMatchesFor(s, openHazard) : [];
+              const quakeMatches = openHazard === 'earthquake' ? getQuakeMatchesFor(s) : [];
+              const lastSms = lastSmsBySub.get(s.id);
 
               return (
                 <Fragment key={s.id}>
@@ -425,8 +441,37 @@ export default function SubscriptionRegistry() {
                       <div className="sr-hazards">
                         {s.hazards.length === 0 && <span className="sr-muted">None</span>}
                         {s.hazards.map((h) => {
-                          const matches = getMatchesFor(s, h);
                           const isOpen = openHazard === h;
+
+                          if (h === 'earthquake') {
+                            const qMatches = getQuakeMatchesFor(s);
+                            const maxMag = qMatches.reduce((m, q) => (q.magnitude > m ? q.magnitude : m), -Infinity);
+                            return (
+                              <button
+                                type="button"
+                                key={h}
+                                className={`badge badge-type sr-hz-btn hz-earthquake${isOpen ? ' sr-hz-open' : ''}`}
+                                aria-expanded={isOpen}
+                                aria-controls={panelId}
+                                onClick={() => toggleHazardPanel(s.id, h)}
+                              >
+                                <span>{SUB_HAZARD_SHORT[h]}</span>
+                                {quakesStatus === 'ok' && qMatches.length > 0 && Number.isFinite(maxMag) && (
+                                  <>
+                                    <span
+                                      className="sr-hz-dot"
+                                      style={{ background: magColor(maxMag) }}
+                                      aria-hidden="true"
+                                    />
+                                    <span className="sr-hz-sev">M{maxMag.toFixed(1)}</span>
+                                    <span className="sr-hz-count">{qMatches.length}</span>
+                                  </>
+                                )}
+                              </button>
+                            );
+                          }
+
+                          const matches = getAlertMatchesFor(s, h);
                           const hasFeed = alertStatus === 'ok' || alertStatus === 'stale';
                           const maxSev = matches.length > 0 ? matches[0].severity : null;
 
@@ -439,7 +484,7 @@ export default function SubscriptionRegistry() {
                               aria-controls={panelId}
                               onClick={() => toggleHazardPanel(s.id, h)}
                             >
-                              <span>{HAZARD_SHORT[h]}</span>
+                              <span>{SUB_HAZARD_SHORT[h]}</span>
                               {hasFeed && maxSev && (
                                 <>
                                   <span
@@ -469,6 +514,9 @@ export default function SubscriptionRegistry() {
                           </option>
                         ))}
                       </select>
+                      <div className="sr-last-sms">
+                        Last SMS: <span className="sr-mono">{lastSms ? formatIstShort(lastSms.createdAt) : '—'}</span>
+                      </div>
                     </td>
                     <td>
                       <div className="sr-dates">
@@ -508,10 +556,10 @@ export default function SubscriptionRegistry() {
                   {openHazard && (
                     <tr id={panelId} className="sr-detail-row">
                       <td colSpan={7}>
-                        <div className="sr-detail-panel" role="region" aria-label={`${HAZARD_LABEL[openHazard]} alerts for ${s.district || s.state}`}>
+                        <div className="sr-detail-panel" role="region" aria-label={`${SUB_HAZARD_LABEL[openHazard]} alerts for ${s.district || s.state}`}>
                           <div className="sr-detail-head">
                             <div>
-                              <strong>{HAZARD_LABEL[openHazard]}</strong>
+                              <strong>{SUB_HAZARD_LABEL[openHazard]}</strong>
                               <span className="sr-muted"> · {s.district ? `${s.district}, ${s.state}` : s.state}</span>
                             </div>
                             <button
@@ -524,88 +572,145 @@ export default function SubscriptionRegistry() {
                             </button>
                           </div>
 
-                          {alertStatus === 'loading' && (
-                            <p className="sr-detail-note">Loading live alerts...</p>
-                          )}
+                          {openHazard === 'earthquake' ? (
+                            <>
+                              {quakesStatus === 'loading' && (
+                                <p className="sr-detail-note">Loading India earthquakes...</p>
+                              )}
+                              {quakesStatus === 'error' && (
+                                <p className="sr-detail-warn" role="alert">
+                                  Earthquake data unavailable. This does not mean there are no earthquakes.
+                                </p>
+                              )}
+                              {quakesStatus === 'ok' && quakeMatches.length === 0 && (
+                                <p className="sr-detail-note">
+                                  No recent India earthquakes recorded in {s.state} in the current feed.
+                                </p>
+                              )}
+                              {quakesStatus === 'ok' && quakeMatches.length > 0 && (
+                                <div className="sr-detail-list">
+                                  {quakeMatches.map((q) => {
+                                    const cat = magCategory(q.magnitude);
+                                    const href = q.url ? safeHref(q.url) : null;
+                                    return (
+                                      <div className="sr-detail-item" key={q.id}>
+                                        <div className="sr-detail-top">
+                                          <span
+                                            className={`sev-tag dm-mag-tag dm-mag-${cat}`}
+                                            style={{ background: magColor(q.magnitude) }}
+                                          >
+                                            M{q.magnitude.toFixed(1)}
+                                          </span>
+                                          <span className="sr-detail-event">{q.location || q.region}</span>
+                                          <span className="sr-scope-badge sr-scope-local">{q.source}</span>
+                                          <span className="sr-detail-time">
+                                            {relativeTime(q.time)} · {formatIstShort(q.time)}
+                                          </span>
+                                        </div>
+                                        <div className="sr-detail-note">
+                                          Depth {Math.round(q.depth)} km · State: {q.state ?? 'India'}
+                                          {href && (
+                                            <>
+                                              {' '}
+                                              ·{' '}
+                                              <a href={href} target="_blank" rel="noreferrer">
+                                                Source
+                                              </a>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {alertStatus === 'loading' && (
+                                <p className="sr-detail-note">Loading live alerts...</p>
+                              )}
 
-                          {alertStatus === 'error' && (
-                            <p className="sr-detail-warn" role="alert">
-                              Alert data unavailable. This does not mean there are no alerts.
-                            </p>
-                          )}
+                              {alertStatus === 'error' && (
+                                <p className="sr-detail-warn" role="alert">
+                                  Alert data unavailable. This does not mean there are no alerts.
+                                </p>
+                              )}
 
-                          {alertStatus === 'stale' && (
-                            <p className="sr-detail-warn" role="status">
-                              Alert data may be outdated.
-                            </p>
-                          )}
+                              {alertStatus === 'stale' && (
+                                <p className="sr-detail-warn" role="status">
+                                  Alert data may be outdated.
+                                </p>
+                              )}
 
-                          {(alertStatus === 'ok' || alertStatus === 'stale') && panelMatches.length === 0 && (
-                            <p className="sr-detail-note">
-                              No active {HAZARD_SHORT[openHazard].toLowerCase()} alerts listed for {s.state} in the feed.
-                            </p>
-                          )}
+                              {(alertStatus === 'ok' || alertStatus === 'stale') && alertMatches.length === 0 && (
+                                <p className="sr-detail-note">
+                                  No active {SUB_HAZARD_SHORT[openHazard].toLowerCase()} alerts listed for {s.state} in the feed.
+                                </p>
+                              )}
 
-                          {(alertStatus === 'ok' || alertStatus === 'stale') && panelMatches.length > 0 && (
-                            <div className="sr-detail-list">
-                              {panelMatches.map((a) => {
-                                const href = safeHref(a.link);
-                                const noAreaText = a.detailsInOriginal || !a.areaDesc.trim();
-                                const areaParts = noAreaText
-                                  ? []
-                                  : a.areaDesc
-                                      .split(';')
-                                      .map((p) => p.trim())
-                                      .filter(Boolean);
-                                const inDistrict = !noAreaText && Boolean(s.district && matchesDistrictWholeWord(a.areaDesc, s.district));
-                                const scopeLabel = inDistrict ? 'Your district' : `Elsewhere in ${s.state}`;
+                              {(alertStatus === 'ok' || alertStatus === 'stale') && alertMatches.length > 0 && (
+                                <div className="sr-detail-list">
+                                  {alertMatches.map((a) => {
+                                    const href = safeHref(a.link);
+                                    const noAreaText = a.detailsInOriginal || !a.areaDesc.trim();
+                                    const areaParts = noAreaText
+                                      ? []
+                                      : a.areaDesc
+                                          .split(';')
+                                          .map((p) => p.trim())
+                                          .filter(Boolean);
+                                    const inDistrict = !noAreaText && Boolean(s.district && matchesDistrictWholeWord(a.areaDesc, s.district));
+                                    const scopeLabel = inDistrict ? 'Your district' : `Elsewhere in ${s.state}`;
 
-                                return (
-                                  <div className="sr-detail-item" key={a.id}>
-                                    <div className="sr-detail-top">
-                                      <span className={`sev-tag sev-${a.severity}`} style={{ background: SEVERITY_COLOR[a.severity] }}>
-                                        {a.severity}
-                                      </span>
-                                      <span className="sr-detail-event">{a.event}</span>
-                                      {!noAreaText && (
-                                        <span className={`sr-scope-badge${inDistrict ? ' sr-scope-local' : ''}`}>
-                                          {scopeLabel}
-                                        </span>
-                                      )}
-                                      <span className="sr-detail-time">{formatSent(a.sent)}</span>
-                                    </div>
-                                    {noAreaText ? (
-                                      <div className="sr-detail-note">
-                                        Details in original alert
-                                        {href && (
-                                          <>
-                                            {' '}
-                                            ·{' '}
-                                            <a href={href} target="_blank" rel="noreferrer">
-                                              Source
-                                            </a>
-                                          </>
+                                    return (
+                                      <div className="sr-detail-item" key={a.id}>
+                                        <div className="sr-detail-top">
+                                          <span className={`sev-tag sev-${a.severity}`} style={{ background: SEVERITY_COLOR[a.severity] }}>
+                                            {a.severity}
+                                          </span>
+                                          <span className="sr-detail-event">{a.event}</span>
+                                          {!noAreaText && (
+                                            <span className={`sr-scope-badge${inDistrict ? ' sr-scope-local' : ''}`}>
+                                              {scopeLabel}
+                                            </span>
+                                          )}
+                                          <span className="sr-detail-time">{formatSent(a.sent)}</span>
+                                        </div>
+                                        {noAreaText ? (
+                                          <div className="sr-detail-note">
+                                            Details in original alert
+                                            {href && (
+                                              <>
+                                                {' '}
+                                                ·{' '}
+                                                <a href={href} target="_blank" rel="noreferrer">
+                                                  Source
+                                                </a>
+                                              </>
+                                            )}
+                                          </div>
+                                        ) : (
+                                          <div className="sr-area-chips">
+                                            {areaParts.map((part, idx) => {
+                                              const chipHit = Boolean(s.district && matchesDistrictWholeWord(part, s.district));
+                                              return (
+                                                <span
+                                                  className={`sr-area-chip${chipHit ? ' sr-area-chip-hit' : ''}`}
+                                                  key={`${idx}-${part}`}
+                                                >
+                                                  {part}
+                                                </span>
+                                              );
+                                            })}
+                                          </div>
                                         )}
                                       </div>
-                                    ) : (
-                                      <div className="sr-area-chips">
-                                        {areaParts.map((part, idx) => {
-                                          const chipHit = Boolean(s.district && matchesDistrictWholeWord(part, s.district));
-                                          return (
-                                            <span
-                                              className={`sr-area-chip${chipHit ? ' sr-area-chip-hit' : ''}`}
-                                              key={`${idx}-${part}`}
-                                            >
-                                              {part}
-                                            </span>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       </td>
@@ -708,7 +813,7 @@ function EditModal({
   const [state, setState] = useState(sub.state);
   const [district, setDistrict] = useState(sub.district ?? '');
   const [locality, setLocality] = useState(sub.locality ?? '');
-  const [hazards, setHazards] = useState<HazardGroup[]>(sub.hazards);
+  const [hazards, setHazards] = useState<SubHazard[]>(sub.hazards);
   const [status, setStatus] = useState<SubStatus>(sub.status);
   const [errors, setErrors] = useState<{ pincode?: string; phone?: string; hazards?: string }>({});
 
@@ -785,7 +890,7 @@ function EditModal({
   const activeWarning =
     resolvedState && state !== resolvedState ? `Pincode belongs to ${resolvedState}` : mismatchNote;
 
-  const toggleHazard = (h: HazardGroup) =>
+  const toggleHazard = (h: SubHazard) =>
     setHazards((cur) => (cur.includes(h) ? cur.filter((x) => x !== h) : [...cur, h]));
 
   const submit = (e: React.FormEvent) => {
@@ -807,7 +912,7 @@ function EditModal({
       state: finalState,
       district: district.trim() || undefined,
       locality: locality.trim() || undefined,
-      hazards: HAZARD_ORDER.filter((h) => hazards.includes(h)),
+      hazards: SUB_HAZARD_ORDER.filter((h) => hazards.includes(h)),
     };
     onSave(withStatus(base, status));
   };
@@ -901,10 +1006,10 @@ function EditModal({
             <fieldset className="sr-fieldset sr-span-full">
               <legend>Hazards</legend>
               <div className="sr-checks">
-                {HAZARD_ORDER.map((h) => (
+                {SUB_HAZARD_ORDER.map((h) => (
                   <label key={h} className="sr-check">
                     <input type="checkbox" checked={hazards.includes(h)} onChange={() => toggleHazard(h)} />
-                    <span>{HAZARD_LABEL[h]}</span>
+                    <span>{SUB_HAZARD_LABEL[h]}</span>
                   </label>
                 ))}
               </div>

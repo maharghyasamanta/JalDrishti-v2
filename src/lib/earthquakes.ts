@@ -11,6 +11,8 @@ export interface Earthquake {
   location: string;
   type: string;
   source: string;
+  inIndia: boolean;
+  state: string | null;
   url?: string;
   felt?: number;
   tsunami?: number;
@@ -22,6 +24,7 @@ export interface EarthquakeData {
   source: string;
   ok: boolean;
   totalCount: number;
+  indiaCount: number;
   maxMagnitude: number;
   avgMagnitude: number;
   byMagnitude: {
@@ -73,8 +76,11 @@ export function formatTime(iso: string): string {
 }
 
 export function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
+  const parsed = new Date(iso).getTime();
+  if (!Number.isFinite(parsed)) return 'unknown';
+  const diffMs = Math.max(0, Date.now() - parsed);
   const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
@@ -85,9 +91,38 @@ export function relativeTime(iso: string): string {
 export async function fetchEarthquakes(signal?: AbortSignal): Promise<EarthquakeData> {
   const res = await fetch(EARTHQUAKES_URL, { signal, headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`Earthquake server returned HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data || !Array.isArray(data.quakes)) {
+  const data: unknown = await res.json();
+  if (!data || typeof data !== 'object' || !Array.isArray((data as { quakes?: unknown }).quakes)) {
     throw new Error('Unexpected response from earthquake API');
   }
-  return data as EarthquakeData;
+  const raw = data as Partial<EarthquakeData> & { quakes: Array<Partial<Earthquake>> };
+  const quakes: Earthquake[] = raw.quakes.map((q) => ({
+    id: String(q.id ?? ''),
+    magnitude: typeof q.magnitude === 'number' ? q.magnitude : Number(q.magnitude),
+    time: String(q.time ?? ''),
+    latitude: typeof q.latitude === 'number' ? q.latitude : Number(q.latitude),
+    longitude: typeof q.longitude === 'number' ? q.longitude : Number(q.longitude),
+    depth: typeof q.depth === 'number' ? q.depth : Number(q.depth ?? 0),
+    region: String(q.region ?? ''),
+    location: String(q.location ?? ''),
+    type: String(q.type ?? 'earthquake'),
+    source: String(q.source ?? ''),
+    inIndia: Boolean(q.inIndia),
+    state: typeof q.state === 'string' && q.state.trim() ? q.state.trim() : null,
+    url: typeof q.url === 'string' ? q.url : undefined,
+    felt: typeof q.felt === 'number' ? q.felt : undefined,
+    tsunami: typeof q.tsunami === 'number' ? q.tsunami : undefined,
+    significance: typeof q.significance === 'number' ? q.significance : undefined,
+  }));
+  return {
+    generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : null,
+    source: String(raw.source ?? ''),
+    ok: Boolean(raw.ok),
+    totalCount: typeof raw.totalCount === 'number' ? raw.totalCount : quakes.length,
+    indiaCount: typeof raw.indiaCount === 'number' ? raw.indiaCount : quakes.filter((q) => q.inIndia).length,
+    maxMagnitude: typeof raw.maxMagnitude === 'number' ? raw.maxMagnitude : 0,
+    avgMagnitude: typeof raw.avgMagnitude === 'number' ? raw.avgMagnitude : 0,
+    byMagnitude: raw.byMagnitude ?? { minor: 0, light: 0, moderate: 0, strong: 0, major: 0 },
+    quakes,
+  };
 }

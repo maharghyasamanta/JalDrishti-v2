@@ -3,8 +3,9 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { STATES } from '../data/states';
 import { EVENTS } from '../data/events';
 import { categoryLabel } from '../data/categories';
-import { BrandMark, SearchIcon, MenuIcon, CloseIcon, MapPinIcon } from './Icons';
+import { BrandMark, BellIcon, SearchIcon, MenuIcon, CloseIcon, MapPinIcon } from './Icons';
 import { useSelection } from '../context/SelectionContext';
+import { useDemoSms } from '../context/DemoSmsContext';
 
 interface Props {
   onSelectState?: (name: string) => void;
@@ -29,6 +30,7 @@ export default function Navbar({ onSelectState, onSelectEvent }: Props) {
   const location = useLocation();
   const navigate = useNavigate();
   const { selectTargetState, selectTargetEvent } = useSelection();
+  const { unreadCount } = useDemoSms();
 
   useEffect(() => {
     if (searchOpen) {
@@ -114,6 +116,20 @@ export default function Navbar({ onSelectState, onSelectEvent }: Props) {
             })}
           </div>
           <div className="nav-right">
+            <Link
+              to="/subscribe#outbox"
+              className="btn-icon nav-bell"
+              aria-label={unreadCount > 0 ? `Demo SMS outbox (${unreadCount} unread)` : 'Demo SMS outbox'}
+              title="Demo SMS outbox"
+              onClick={() => setMenuOpen(false)}
+            >
+              <BellIcon />
+              {unreadCount > 0 && (
+                <span className="nav-bell-badge" aria-hidden="true">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </Link>
             <button className="btn-icon" onClick={() => setSearchOpen(true)} aria-label="Search">
               <SearchIcon />
             </button>
