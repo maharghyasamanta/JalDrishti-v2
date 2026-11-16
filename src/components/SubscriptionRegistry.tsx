@@ -8,6 +8,7 @@ import {
   loadSubscriptions,
   maskPhone,
   normalizePhone,
+  normalizePincode,
   resetSampleSubscriptions,
   saveSubscriptions,
   todayStr,
@@ -17,7 +18,7 @@ import {
 } from '../lib/subscriptions';
 import { CloseIcon } from './Icons';
 
-type SortMode = 'date-desc' | 'date-asc' | 'status';
+type SortMode = 'date-desc' | 'date-asc' | 'status' | 'pincode';
 
 const STATUS_RANK: Record<SubStatus, number> = { Verified: 1, Pending: 2, Unsubscribed: 3 };
 const STATUS_CLASS: Record<SubStatus, string> = {
@@ -83,6 +84,7 @@ export default function SubscriptionRegistry() {
       if (fStatus !== 'ALL' && s.status !== fStatus) return false;
       if (q) {
         const hit =
+          s.pincode.includes(q) ||
           s.id.toLowerCase().includes(q) ||
           s.phone.includes(q.replace(/\D/g, '') || '\u0000') ||
           s.state.toLowerCase().includes(q);
@@ -91,6 +93,16 @@ export default function SubscriptionRegistry() {
       return true;
     });
     list.sort((a, b) => {
+      if (sort === 'pincode') {
+        if (!a.pincode && !b.pincode) {
+          return b.subscribedDate.localeCompare(a.subscribedDate) || a.id.localeCompare(b.id);
+        }
+        if (!a.pincode) return 1;
+        if (!b.pincode) return -1;
+        const d = a.pincode.localeCompare(b.pincode);
+        if (d !== 0) return d;
+        return b.subscribedDate.localeCompare(a.subscribedDate) || a.id.localeCompare(b.id);
+      }
       if (sort === 'status') {
         const d = STATUS_RANK[a.status] - STATUS_RANK[b.status];
         if (d !== 0) return d;
@@ -124,11 +136,12 @@ export default function SubscriptionRegistry() {
       setToast('No matching subscriptions to export.');
       return;
     }
-    const header = ['Subscription ID', 'Mobile (masked)', 'Area', 'Hazards', 'Status', 'Subscribed Date', 'Verified Date'];
+    const header = ['Pincode', 'Subscription ID', 'Mobile (masked)', 'Area', 'Hazards', 'Status', 'Subscribed Date', 'Verified Date'];
     const lines = [header.map(csvCell).join(',')];
     for (const s of visible) {
       lines.push(
         [
+          s.pincode,
           s.id,
           maskPhone(s.phone),
           s.state,
@@ -157,9 +170,9 @@ export default function SubscriptionRegistry() {
     }
   };
 
-  const toggleSort = (kind: 'date' | 'status') => {
+  const toggleSort = (kind: 'date' | 'status' | 'pincode') => {
     if (kind === 'date') setSort(sort === 'date-desc' ? 'date-asc' : 'date-desc');
-    else setSort('status');
+    else setSort(kind);
   };
 
   return (
@@ -201,7 +214,7 @@ export default function SubscriptionRegistry() {
           <input
             id="sr-search"
             type="search"
-            placeholder="Search by ID, mobile number or area..."
+            placeholder="Search by pincode, ID, mobile number or area..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -245,6 +258,7 @@ export default function SubscriptionRegistry() {
             <option value="date-desc">Date: newest first</option>
             <option value="date-asc">Date: oldest first</option>
             <option value="status">Status: verified first</option>
+            <option value="pincode">Pincode: low to high</option>
           </select>
         </div>
       </div>
@@ -253,7 +267,11 @@ export default function SubscriptionRegistry() {
         <table className="sr-table">
           <thead>
             <tr>
-              <th scope="col">ID</th>
+              <th scope="col">
+                <button type="button" className="sr-th-btn" onClick={() => toggleSort('pincode')}>
+                  Pincode {sort === 'pincode' ? '▲' : ''}
+                </button>
+              </th>
               <th scope="col">Mobile</th>
               <th scope="col">Area</th>
               <th scope="col">Hazards</th>
@@ -276,7 +294,7 @@ export default function SubscriptionRegistry() {
             {visible.map((s) => (
               <tr key={s.id}>
                 <td>
-                  <span className="sr-mono sr-strong">{s.id}</span>
+                  <span className="sr-mono sr-strong">{s.pincode || '—'}</span>
                 </td>
                 <td>
                   <span className="sr-mono">{maskPhone(s.phone)}</span>
@@ -430,25 +448,34 @@ function EditModal({
   onClose: () => void;
   onSave: (s: Subscription) => void;
 }) {
+  const [pincode, setPincode] = useState(sub.pincode);
   const [phone, setPhone] = useState(formatPhone(sub.phone));
   const [state, setState] = useState(sub.state);
   const [hazards, setHazards] = useState<HazardGroup[]>(sub.hazards);
   const [status, setStatus] = useState<SubStatus>(sub.status);
-  const [errors, setErrors] = useState<{ phone?: string; hazards?: string }>({});
+  const [errors, setErrors] = useState<{ pincode?: string; phone?: string; hazards?: string }>({});
 
   const toggleHazard = (h: HazardGroup) =>
     setHazards((cur) => (cur.includes(h) ? cur.filter((x) => x !== h) : [...cur, h]));
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    const normalizedPincode = normalizePincode(pincode);
     const normalized = normalizePhone(phone);
     const next: typeof errors = {};
+    if (!normalizedPincode) next.pincode = 'Enter a valid 6-digit pincode (cannot start with 0).';
     if (!normalized) next.phone = 'Enter a valid 10-digit Indian mobile number (starts with 6-9).';
     if (hazards.length === 0) next.hazards = 'Select at least one hazard.';
     setErrors(next);
-    if (next.phone || next.hazards || !normalized) return;
+    if (next.pincode || next.phone || next.hazards || !normalizedPincode || !normalized) return;
 
-    const base: Subscription = { ...sub, phone: normalized, state, hazards: HAZARD_ORDER.filter((h) => hazards.includes(h)) };
+    const base: Subscription = {
+      ...sub,
+      pincode: normalizedPincode,
+      phone: normalized,
+      state,
+      hazards: HAZARD_ORDER.filter((h) => hazards.includes(h)),
+    };
     onSave(withStatus(base, status));
   };
 
@@ -487,6 +514,21 @@ function EditModal({
               </select>
             </div>
             <div className="field">
+              <label htmlFor="sr-e-pincode">Pincode</label>
+              <input
+                id="sr-e-pincode"
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                pattern="[0-9]*"
+                value={pincode}
+                onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                aria-invalid={Boolean(errors.pincode)}
+                autoFocus
+              />
+              {errors.pincode && <span className="sr-error">{errors.pincode}</span>}
+            </div>
+            <div className="field">
               <label htmlFor="sr-e-phone">Mobile number</label>
               <input
                 id="sr-e-phone"
@@ -495,7 +537,6 @@ function EditModal({
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 aria-invalid={Boolean(errors.phone)}
-                autoFocus
               />
               {errors.phone && <span className="sr-error">{errors.phone}</span>}
             </div>

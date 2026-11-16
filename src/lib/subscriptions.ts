@@ -6,10 +6,11 @@ export const SUB_STATUSES: SubStatus[] = ['Verified', 'Pending', 'Unsubscribed']
 
 export const CHANGE_EVENT = 'jaldrishti:subscriptions-changed';
 
-const STORAGE_KEY = 'jaldrishti:demo:subscriptions:v1';
+const STORAGE_KEY = 'jaldrishti:demo:subscriptions:v2';
 
 export interface Subscription {
   id: string;
+  pincode: string;
   phone: string;
   state: string;
   hazards: HazardGroup[];
@@ -21,6 +22,7 @@ export interface Subscription {
 const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
   {
     id: 'SUB-001',
+    pincode: '781001',
     phone: '9876543210',
     state: 'Assam',
     hazards: ['water', 'storm'],
@@ -30,6 +32,7 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
   },
   {
     id: 'SUB-002',
+    pincode: '682001',
     phone: '9847012345',
     state: 'Kerala',
     hazards: ['water'],
@@ -39,6 +42,7 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
   },
   {
     id: 'SUB-003',
+    pincode: '400001',
     phone: '9765432109',
     state: 'Maharashtra',
     hazards: ['water', 'storm', 'heat'],
@@ -47,6 +51,7 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
   },
   {
     id: 'SUB-004',
+    pincode: '751001',
     phone: '9937112233',
     state: 'Odisha',
     hazards: ['water', 'storm'],
@@ -56,6 +61,7 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
   },
   {
     id: 'SUB-005',
+    pincode: '800001',
     phone: '9123456780',
     state: 'Bihar',
     hazards: ['water', 'cold'],
@@ -64,6 +70,7 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
   },
   {
     id: 'SUB-006',
+    pincode: '600001',
     phone: '9840987654',
     state: 'Tamil Nadu',
     hazards: ['storm', 'heat'],
@@ -82,6 +89,11 @@ export function todayStr(): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+export function normalizePincode(raw: string): string | null {
+  const digits = raw.replace(/\D/g, '');
+  return /^[1-9]\d{5}$/.test(digits) ? digits : null;
 }
 
 export function normalizePhone(raw: string): string | null {
@@ -132,17 +144,22 @@ export function loadSubscriptions(): Subscription[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      return parsed.filter(
-        (item): item is Subscription =>
-          Boolean(item) &&
-          typeof item === 'object' &&
-          typeof item.id === 'string' &&
-          typeof item.phone === 'string' &&
-          typeof item.state === 'string' &&
-          Array.isArray(item.hazards) &&
-          SUB_STATUSES.includes(item.status) &&
-          typeof item.subscribedDate === 'string',
-      );
+      return parsed
+        .filter(
+          (item): item is Omit<Subscription, 'pincode'> & { pincode?: unknown } =>
+            Boolean(item) &&
+            typeof item === 'object' &&
+            typeof item.id === 'string' &&
+            typeof item.phone === 'string' &&
+            typeof item.state === 'string' &&
+            Array.isArray(item.hazards) &&
+            SUB_STATUSES.includes(item.status) &&
+            typeof item.subscribedDate === 'string',
+        )
+        .map((item) => ({
+          ...item,
+          pincode: typeof item.pincode === 'string' ? item.pincode : '',
+        }));
     }
   } catch {
     // Fallback to in-memory sample rows if localStorage is unavailable or corrupt
