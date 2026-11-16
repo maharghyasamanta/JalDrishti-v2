@@ -1,5 +1,6 @@
 import PageHeader from '../components/PageHeader';
 import { InfoIcon } from '../components/Icons';
+import SubscriptionRegistry from '../components/SubscriptionRegistry';
 
 const STEPS = [
   {
@@ -56,6 +57,8 @@ export default function Subscribe() {
               Subscribe (coming next)
             </button>
           </div>
+
+          <SubscriptionRegistry />
         </div>
       </main>
     </div>
