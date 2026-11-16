@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { STATES } from '../data/states';
-import { HAZARD_LABEL, HAZARD_ORDER, HAZARD_SHORT, type HazardGroup } from '../lib/sachet';
+import {
+  HAZARD_LABEL,
+  HAZARD_ORDER,
+  HAZARD_SHORT,
+  SEVERITY_COLOR,
+  compareAlerts,
+  fetchSachetAlerts,
+  formatSent,
+  type HazardGroup,
+  type SachetAlert,
+  type SachetData,
+} from '../lib/sachet';
 import {
   CHANGE_EVENT,
   SUB_STATUSES,
@@ -10,6 +21,7 @@ import {
   normalizePhone,
   normalizePincode,
   resetSampleSubscriptions,
+  resolvePincode,
   saveSubscriptions,
   todayStr,
   withStatus,
@@ -19,6 +31,10 @@ import {
 import { CloseIcon } from './Icons';
 
 type SortMode = 'date-desc' | 'date-asc' | 'status' | 'pincode';
+type AlertFeedStatus = 'loading' | 'ok' | 'stale' | 'error';
+
+const STALE_AFTER_MS = 30 * 60 * 1000;
+const REFRESH_MS = 5 * 60 * 1000;
 
 const STATUS_RANK: Record<SubStatus, number> = { Verified: 1, Pending: 2, Unsubscribed: 3 };
 const STATUS_CLASS: Record<SubStatus, string> = {
@@ -29,6 +45,28 @@ const STATUS_CLASS: Record<SubStatus, string> = {
 
 function csvCell(v: string): string {
   return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+function safeHref(url: string): string | null {
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function matchesDistrictWholeWord(text: string, district: string): boolean {
+  const trimmed = district.trim();
+  if (!trimmed || !text) return false;
+  const pattern = new RegExp(`(?:^|[^\\p{L}\\p{N}])(${escapeRegex(trimmed)})(?=$|[^\\p{L}\\p{N}])`, 'iu');
+  return pattern.test(text);
+}
+
+function formatAreaSubline(sub: Subscription): string | null {
+  if (sub.district && sub.locality) return `${sub.locality} · ${sub.state}`;
+  if (sub.district) return sub.state;
+  if (sub.locality) return `${sub.locality} · ${sub.state}`;
+  return null;
 }
 
 export default function SubscriptionRegistry() {
@@ -42,6 +80,47 @@ export default function SubscriptionRegistry() {
   const [editing, setEditing] = useState<Subscription | null>(null);
   const [deleting, setDeleting] = useState<Subscription | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<{ subId: string; hazard: HazardGroup } | null>(null);
+
+  const [alertData, setAlertData] = useState<SachetData | null>(null);
+  const [alertLoaded, setAlertLoaded] = useState(false);
+  const [alertFailed, setAlertFailed] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const alertAbortRef = useRef<AbortController | null>(null);
+
+  const loadAlerts = useCallback(() => {
+    alertAbortRef.current?.abort();
+    const ctl = new AbortController();
+    alertAbortRef.current = ctl;
+    fetchSachetAlerts(ctl.signal)
+      .then((d) => {
+        setAlertData(d);
+        setAlertFailed(false);
+      })
+      .catch(() => {
+        if (!ctl.signal.aborted) setAlertFailed(true);
+      })
+      .finally(() => {
+        if (!ctl.signal.aborted) setAlertLoaded(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    loadAlerts();
+    const refresh = window.setInterval(loadAlerts, REFRESH_MS);
+    const tick = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => {
+      window.clearInterval(refresh);
+      window.clearInterval(tick);
+      alertAbortRef.current?.abort();
+    };
+  }, [loadAlerts]);
+
+  const alertStatus: AlertFeedStatus = useMemo(() => {
+    if (!alertData) return alertLoaded ? 'error' : 'loading';
+    const age = alertData.generatedAt ? now - alertData.generatedAt.getTime() : Infinity;
+    return alertFailed || !alertData.upstreamOk || age > STALE_AFTER_MS ? 'stale' : 'ok';
+  }, [alertData, alertLoaded, alertFailed, now]);
 
   // Keep in sync when the form (or another tab) changes the data
   useEffect(() => {
@@ -87,7 +166,9 @@ export default function SubscriptionRegistry() {
           s.pincode.includes(q) ||
           s.id.toLowerCase().includes(q) ||
           s.phone.includes(q.replace(/\D/g, '') || '\u0000') ||
-          s.state.toLowerCase().includes(q);
+          s.state.toLowerCase().includes(q) ||
+          (s.district ? s.district.toLowerCase().includes(q) : false) ||
+          (s.locality ? s.locality.toLowerCase().includes(q) : false);
         if (!hit) return false;
       }
       return true;
@@ -115,6 +196,16 @@ export default function SubscriptionRegistry() {
     return list;
   }, [subs, query, fState, fHazard, fStatus, sort]);
 
+  const getMatchesFor = useCallback(
+    (sub: Subscription, hazard: HazardGroup): SachetAlert[] => {
+      if (!alertData) return [];
+      return alertData.alerts
+        .filter((a) => a.hazard === hazard && a.states.includes(sub.state))
+        .sort(compareAlerts);
+    },
+    [alertData],
+  );
+
   const hasFilters = query.trim() !== '' || fState !== 'ALL' || fHazard !== 'ALL' || fStatus !== 'ALL';
 
   const clearFilters = () => {
@@ -136,7 +227,18 @@ export default function SubscriptionRegistry() {
       setToast('No matching subscriptions to export.');
       return;
     }
-    const header = ['Pincode', 'Subscription ID', 'Mobile (masked)', 'Area', 'Hazards', 'Status', 'Subscribed Date', 'Verified Date'];
+    const header = [
+      'Pincode',
+      'Subscription ID',
+      'Mobile (masked)',
+      'Area',
+      'District',
+      'Locality',
+      'Hazards',
+      'Status',
+      'Subscribed Date',
+      'Verified Date',
+    ];
     const lines = [header.map(csvCell).join(',')];
     for (const s of visible) {
       lines.push(
@@ -145,6 +247,8 @@ export default function SubscriptionRegistry() {
           s.id,
           maskPhone(s.phone),
           s.state,
+          s.district ?? '',
+          s.locality ?? '',
           s.hazards.map((h) => HAZARD_SHORT[h]).join('; '),
           s.status,
           s.subscribedDate,
@@ -175,13 +279,17 @@ export default function SubscriptionRegistry() {
     else setSort(kind);
   };
 
+  const toggleHazardPanel = (subId: string, hazard: HazardGroup) => {
+    setExpanded((cur) => (cur && cur.subId === subId && cur.hazard === hazard ? null : { subId, hazard }));
+  };
+
   return (
     <section className="card sr-card" aria-labelledby="sr-heading">
       <div className="sr-head">
         <div>
           <h3 id="sr-heading">Subscription registry</h3>
           <p className="sr-sub">
-            Showing {visible.length} of {subs.length} subscriptions. Mobile numbers are masked in the table.
+            Showing {visible.length} of {subs.length} subscriptions. Mobile numbers are masked in the table. Click a hazard pill to inspect active alert locations.
           </p>
         </div>
         <div className="sr-head-actions">
@@ -197,6 +305,7 @@ export default function SubscriptionRegistry() {
               resetSampleSubscriptions();
               setSubs(loadSubscriptions());
               clearFilters();
+              setExpanded(null);
               setToast('Sample subscriptions restored.');
             }}
           >
@@ -291,75 +400,220 @@ export default function SubscriptionRegistry() {
             </tr>
           </thead>
           <tbody>
-            {visible.map((s) => (
-              <tr key={s.id}>
-                <td>
-                  <span className="sr-mono sr-strong">{s.pincode || '—'}</span>
-                </td>
-                <td>
-                  <span className="sr-mono">{maskPhone(s.phone)}</span>
-                </td>
-                <td>{s.state}</td>
-                <td>
-                  <div className="sr-hazards">
-                    {s.hazards.length === 0 && <span className="sr-muted">None</span>}
-                    {s.hazards.map((h) => (
-                      <span className="badge badge-type" key={h}>
-                        {HAZARD_SHORT[h]}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-                <td>
-                  <select
-                    className={`sr-status-select ${STATUS_CLASS[s.status]}`}
-                    value={s.status}
-                    aria-label={`Change status for ${s.id}`}
-                    onChange={(e) => changeStatus(s.id, e.target.value as SubStatus)}
-                  >
-                    {SUB_STATUSES.map((st) => (
-                      <option key={st} value={st}>
-                        {st}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td>
-                  <div className="sr-dates">
-                    <div>
-                      <span className="sr-muted">Sub: </span>
-                      <span className="sr-mono">{s.subscribedDate}</span>
-                    </div>
-                    {s.status === 'Verified' && s.verifiedDate && (
-                      <div>
-                        <span className="sr-muted">Ver: </span>
-                        <span className="sr-mono">{s.verifiedDate}</span>
+            {visible.map((s) => {
+              const areaSubline = formatAreaSubline(s);
+              const openHazard = expanded && expanded.subId === s.id && s.hazards.includes(expanded.hazard) ? expanded.hazard : null;
+              const panelId = `sr-panel-${s.id}`;
+              const panelMatches = openHazard ? getMatchesFor(s, openHazard) : [];
+
+              return (
+                <Fragment key={s.id}>
+                  <tr>
+                    <td>
+                      <span className="sr-mono sr-strong">{s.pincode || '—'}</span>
+                    </td>
+                    <td>
+                      <span className="sr-mono">{maskPhone(s.phone)}</span>
+                    </td>
+                    <td>
+                      <div className="sr-area-cell">
+                        <div className="sr-strong">{s.district || s.state}</div>
+                        {areaSubline && <div className="sr-area-sub">{areaSubline}</div>}
                       </div>
-                    )}
-                  </div>
-                </td>
-                <td>
-                  <div className="sr-row-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      aria-label={`Edit subscription ${s.id}`}
-                      onClick={() => setEditing(s)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm sr-danger"
-                      aria-label={`Delete subscription ${s.id}`}
-                      onClick={() => setDeleting(s)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+                    </td>
+                    <td>
+                      <div className="sr-hazards">
+                        {s.hazards.length === 0 && <span className="sr-muted">None</span>}
+                        {s.hazards.map((h) => {
+                          const matches = getMatchesFor(s, h);
+                          const isOpen = openHazard === h;
+                          const hasFeed = alertStatus === 'ok' || alertStatus === 'stale';
+                          const maxSev = matches.length > 0 ? matches[0].severity : null;
+
+                          return (
+                            <button
+                              type="button"
+                              key={h}
+                              className={`badge badge-type sr-hz-btn${isOpen ? ' sr-hz-open' : ''}`}
+                              aria-expanded={isOpen}
+                              aria-controls={panelId}
+                              onClick={() => toggleHazardPanel(s.id, h)}
+                            >
+                              <span>{HAZARD_SHORT[h]}</span>
+                              {hasFeed && maxSev && (
+                                <>
+                                  <span
+                                    className="sr-hz-dot"
+                                    style={{ background: SEVERITY_COLOR[maxSev] }}
+                                    aria-hidden="true"
+                                  />
+                                  <span className="sr-hz-sev">{maxSev}</span>
+                                  <span className="sr-hz-count">{matches.length}</span>
+                                </>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </td>
+                    <td>
+                      <select
+                        className={`sr-status-select ${STATUS_CLASS[s.status]}`}
+                        value={s.status}
+                        aria-label={`Change status for ${s.id}`}
+                        onChange={(e) => changeStatus(s.id, e.target.value as SubStatus)}
+                      >
+                        {SUB_STATUSES.map((st) => (
+                          <option key={st} value={st}>
+                            {st}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <div className="sr-dates">
+                        <div>
+                          <span className="sr-muted">Sub: </span>
+                          <span className="sr-mono">{s.subscribedDate}</span>
+                        </div>
+                        {s.status === 'Verified' && s.verifiedDate && (
+                          <div>
+                            <span className="sr-muted">Ver: </span>
+                            <span className="sr-mono">{s.verifiedDate}</span>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="sr-row-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          aria-label={`Edit subscription ${s.id}`}
+                          onClick={() => setEditing(s)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm sr-danger"
+                          aria-label={`Delete subscription ${s.id}`}
+                          onClick={() => setDeleting(s)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {openHazard && (
+                    <tr id={panelId} className="sr-detail-row">
+                      <td colSpan={7}>
+                        <div className="sr-detail-panel" role="region" aria-label={`${HAZARD_LABEL[openHazard]} alerts for ${s.district || s.state}`}>
+                          <div className="sr-detail-head">
+                            <div>
+                              <strong>{HAZARD_LABEL[openHazard]}</strong>
+                              <span className="sr-muted"> · {s.district ? `${s.district}, ${s.state}` : s.state}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              aria-label="Close alert locations"
+                              onClick={() => setExpanded(null)}
+                            >
+                              Close
+                            </button>
+                          </div>
+
+                          {alertStatus === 'loading' && (
+                            <p className="sr-detail-note">Loading live alerts...</p>
+                          )}
+
+                          {alertStatus === 'error' && (
+                            <p className="sr-detail-warn" role="alert">
+                              Alert data unavailable. This does not mean there are no alerts.
+                            </p>
+                          )}
+
+                          {alertStatus === 'stale' && (
+                            <p className="sr-detail-warn" role="status">
+                              Alert data may be outdated.
+                            </p>
+                          )}
+
+                          {(alertStatus === 'ok' || alertStatus === 'stale') && panelMatches.length === 0 && (
+                            <p className="sr-detail-note">
+                              No active {HAZARD_SHORT[openHazard].toLowerCase()} alerts listed for {s.state} in the feed.
+                            </p>
+                          )}
+
+                          {(alertStatus === 'ok' || alertStatus === 'stale') && panelMatches.length > 0 && (
+                            <div className="sr-detail-list">
+                              {panelMatches.map((a) => {
+                                const href = safeHref(a.link);
+                                const noAreaText = a.detailsInOriginal || !a.areaDesc.trim();
+                                const areaParts = noAreaText
+                                  ? []
+                                  : a.areaDesc
+                                      .split(';')
+                                      .map((p) => p.trim())
+                                      .filter(Boolean);
+                                const inDistrict = !noAreaText && Boolean(s.district && matchesDistrictWholeWord(a.areaDesc, s.district));
+                                const scopeLabel = inDistrict ? 'Your district' : `Elsewhere in ${s.state}`;
+
+                                return (
+                                  <div className="sr-detail-item" key={a.id}>
+                                    <div className="sr-detail-top">
+                                      <span className={`sev-tag sev-${a.severity}`} style={{ background: SEVERITY_COLOR[a.severity] }}>
+                                        {a.severity}
+                                      </span>
+                                      <span className="sr-detail-event">{a.event}</span>
+                                      {!noAreaText && (
+                                        <span className={`sr-scope-badge${inDistrict ? ' sr-scope-local' : ''}`}>
+                                          {scopeLabel}
+                                        </span>
+                                      )}
+                                      <span className="sr-detail-time">{formatSent(a.sent)}</span>
+                                    </div>
+                                    {noAreaText ? (
+                                      <div className="sr-detail-note">
+                                        Details in original alert
+                                        {href && (
+                                          <>
+                                            {' '}
+                                            ·{' '}
+                                            <a href={href} target="_blank" rel="noreferrer">
+                                              Source
+                                            </a>
+                                          </>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="sr-area-chips">
+                                        {areaParts.map((part, idx) => {
+                                          const chipHit = Boolean(s.district && matchesDistrictWholeWord(part, s.district));
+                                          return (
+                                            <span
+                                              className={`sr-area-chip${chipHit ? ' sr-area-chip-hit' : ''}`}
+                                              key={`${idx}-${part}`}
+                                            >
+                                              {part}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -422,6 +676,7 @@ export default function SubscriptionRegistry() {
                     subs.filter((s) => s.id !== deleting.id),
                     `Deleted subscription ${deleting.id}.`,
                   );
+                  if (expanded?.subId === deleting.id) setExpanded(null);
                   setDeleting(null);
                 }}
               >
@@ -451,9 +706,84 @@ function EditModal({
   const [pincode, setPincode] = useState(sub.pincode);
   const [phone, setPhone] = useState(formatPhone(sub.phone));
   const [state, setState] = useState(sub.state);
+  const [district, setDistrict] = useState(sub.district ?? '');
+  const [locality, setLocality] = useState(sub.locality ?? '');
   const [hazards, setHazards] = useState<HazardGroup[]>(sub.hazards);
   const [status, setStatus] = useState<SubStatus>(sub.status);
   const [errors, setErrors] = useState<{ pincode?: string; phone?: string; hazards?: string }>({});
+
+  const [lookupStatus, setLookupStatus] = useState<'idle' | 'loading' | 'resolved' | 'failed'>('idle');
+  const [resolvedState, setResolvedState] = useState<string | null>(null);
+  const [mismatchNote, setMismatchNote] = useState<string | null>(null);
+
+  const initialPinRef = useRef(sub.pincode);
+  const hasInitialDistrictRef = useRef(Boolean(sub.district));
+  const selectedStateRef = useRef(state);
+  selectedStateRef.current = state;
+
+  useEffect(() => {
+    const validPin = normalizePincode(pincode);
+    if (!validPin) {
+      setLookupStatus('idle');
+      setResolvedState(null);
+      setMismatchNote(null);
+      if (pincode !== initialPinRef.current) {
+        setDistrict('');
+        setLocality('');
+      }
+      return;
+    }
+
+    if (validPin === initialPinRef.current && hasInitialDistrictRef.current) {
+      return;
+    }
+
+    const ctl = new AbortController();
+    setLookupStatus('loading');
+    setMismatchNote(null);
+
+    const timer = window.setTimeout(() => {
+      resolvePincode(validPin, ctl.signal)
+        .then((res) => {
+          if (ctl.signal.aborted) return;
+          if (!res) {
+            setLookupStatus('failed');
+            setResolvedState(null);
+            setMismatchNote(null);
+            if (validPin !== initialPinRef.current) {
+              setDistrict('');
+              setLocality('');
+            }
+            return;
+          }
+          const prevState = selectedStateRef.current;
+          setDistrict(res.district);
+          setLocality(res.locality);
+          setResolvedState(res.state);
+          setLookupStatus('resolved');
+          setState(res.state);
+          if (prevState && prevState !== res.state) {
+            setMismatchNote(`Pincode belongs to ${res.state}`);
+          } else {
+            setMismatchNote(null);
+          }
+        })
+        .catch(() => {
+          if (!ctl.signal.aborted) {
+            setLookupStatus('failed');
+            setResolvedState(null);
+          }
+        });
+    }, 400);
+
+    return () => {
+      window.clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [pincode]);
+
+  const activeWarning =
+    resolvedState && state !== resolvedState ? `Pincode belongs to ${resolvedState}` : mismatchNote;
 
   const toggleHazard = (h: HazardGroup) =>
     setHazards((cur) => (cur.includes(h) ? cur.filter((x) => x !== h) : [...cur, h]));
@@ -469,11 +799,14 @@ function EditModal({
     setErrors(next);
     if (next.pincode || next.phone || next.hazards || !normalizedPincode || !normalized) return;
 
+    const finalState = resolvedState ?? state;
     const base: Subscription = {
       ...sub,
       pincode: normalizedPincode,
       phone: normalized,
-      state,
+      state: finalState,
+      district: district.trim() || undefined,
+      locality: locality.trim() || undefined,
       hazards: HAZARD_ORDER.filter((h) => hazards.includes(h)),
     };
     onSave(withStatus(base, status));
@@ -527,6 +860,16 @@ function EditModal({
                 autoFocus
               />
               {errors.pincode && <span className="sr-error">{errors.pincode}</span>}
+              {lookupStatus === 'loading' && <span className="sr-note">Looking up pincode...</span>}
+              {lookupStatus === 'resolved' && district && (
+                <span className="sr-note">
+                  Resolved: {locality ? `${locality}, ` : ''}
+                  {district}, {resolvedState ?? state}
+                </span>
+              )}
+              {lookupStatus === 'failed' && (
+                <span className="sr-note">Could not resolve pincode. Manual area will be used.</span>
+              )}
             </div>
             <div className="field">
               <label htmlFor="sr-e-phone">Mobile number</label>
@@ -549,6 +892,11 @@ function EditModal({
                   </option>
                 ))}
               </select>
+              {activeWarning && (
+                <span className="sr-warn-note" role="status">
+                  {activeWarning}
+                </span>
+              )}
             </div>
             <fieldset className="sr-fieldset sr-span-full">
               <legend>Hazards</legend>

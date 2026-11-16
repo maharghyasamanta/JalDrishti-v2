@@ -15,10 +15,11 @@ import { applyCors } from './cors.js';
 import { checkAdminAuth, getAdminToken } from './auth.js';
 import { adminLimiter } from './rateLimiter.js';
 import { clientIp } from './ip.js';
+import { createPincodeService, PIN_RE } from './pincode.js';
 
 const DIST_DIR = fileURLToPath(new URL('../dist', import.meta.url));
 const ROOT_ENV_PATH = fileURLToPath(new URL('../.env', import.meta.url));
-const PUBLIC_GET_ONLY_PATHS = new Set(['/healthz', '/api/alerts', '/api/earthquakes']);
+const PUBLIC_GET_ONLY_PATHS = new Set(['/healthz', '/api/alerts', '/api/earthquakes', '/api/pincode']);
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -147,8 +148,9 @@ async function tryServeStatic(req, res, pathname) {
   return true;
 }
 
-export function createHandler(alertsService, earthquakeService, { getViteMiddlewares, router: customRouter } = {}) {
+export function createHandler(alertsService, earthquakeService, { getViteMiddlewares, router: customRouter, pincodeService } = {}) {
   const router = customRouter || createRouter();
+  const pincodeSvc = pincodeService || createPincodeService();
 
   // Future routes (admin, subscribe, etc.) will be added by other modules.
 
@@ -239,6 +241,23 @@ export function createHandler(alertsService, earthquakeService, { getViteMiddlew
           }
           sendJson(res, 200, payload, {
             headers: { 'Cache-Control': 'public, max-age=300' },
+            head: isHead,
+          });
+          return;
+        }
+
+        if (url.pathname === '/api/pincode') {
+          const pin = String(url.searchParams.get('pin') ?? '').trim();
+          if (!PIN_RE.test(pin)) {
+            sendJson(res, 400, { pincode: pin, ok: false, error: 'Invalid pincode' }, {
+              headers: { 'Cache-Control': 'no-store' },
+              head: isHead,
+            });
+            return;
+          }
+          const result = await pincodeSvc.lookup(pin);
+          sendJson(res, 200, result, {
+            headers: { 'Cache-Control': result?.ok ? 'public, max-age=300' : 'no-store' },
             head: isHead,
           });
           return;
@@ -347,6 +366,8 @@ export function start() {
   const eqTimer = setInterval(() => earthquakeService.refresh(), EQ_REFRESH_MS);
   eqTimer.unref?.();
 
+  const pincodeService = createPincodeService({ log });
+
   const isProd = process.env.NODE_ENV === 'production';
   let vitePromise = null;
   const getViteMiddlewares = isProd
@@ -371,7 +392,7 @@ export function start() {
 
   const port = Number(process.env.PORT) || 3000;
   const host = process.env.HOST || '127.0.0.1';
-  const server = http.createServer(createHandler(alertsService, earthquakeService, { getViteMiddlewares }));
+  const server = http.createServer(createHandler(alertsService, earthquakeService, { getViteMiddlewares, pincodeService }));
 
   server.on('error', (err) => {
     if (err?.code === 'EADDRINUSE') {

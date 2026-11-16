@@ -13,10 +13,18 @@ export interface Subscription {
   pincode: string;
   phone: string;
   state: string;
+  district?: string;
+  locality?: string;
   hazards: HazardGroup[];
   status: SubStatus;
   subscribedDate: string;
   verifiedDate?: string;
+}
+
+export interface ResolvedPincode {
+  district: string;
+  state: string;
+  locality: string;
 }
 
 const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
@@ -25,6 +33,8 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     pincode: '781001',
     phone: '9876543210',
     state: 'Assam',
+    district: 'Kamrup Metropolitan',
+    locality: 'Guwahati',
     hazards: ['water', 'storm'],
     status: 'Verified',
     subscribedDate: '2026-11-10',
@@ -35,6 +45,8 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     pincode: '682001',
     phone: '9847012345',
     state: 'Kerala',
+    district: 'Ernakulam',
+    locality: 'Ernakulam',
     hazards: ['water'],
     status: 'Verified',
     subscribedDate: '2026-11-12',
@@ -45,6 +57,8 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     pincode: '400001',
     phone: '9765432109',
     state: 'Maharashtra',
+    district: 'Mumbai',
+    locality: 'Mumbai',
     hazards: ['water', 'storm', 'heat'],
     status: 'Pending',
     subscribedDate: '2026-11-14',
@@ -54,6 +68,8 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     pincode: '751001',
     phone: '9937112233',
     state: 'Odisha',
+    district: 'Khordha',
+    locality: 'Bhubaneswar',
     hazards: ['water', 'storm'],
     status: 'Verified',
     subscribedDate: '2026-11-11',
@@ -64,6 +80,8 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     pincode: '800001',
     phone: '9123456780',
     state: 'Bihar',
+    district: 'Patna',
+    locality: 'Patna',
     hazards: ['water', 'cold'],
     status: 'Unsubscribed',
     subscribedDate: '2026-11-08',
@@ -73,6 +91,8 @@ const SAMPLE_SUBSCRIPTIONS: Subscription[] = [
     pincode: '600001',
     phone: '9840987654',
     state: 'Tamil Nadu',
+    district: 'Chennai',
+    locality: 'Chennai',
     hazards: ['storm', 'heat'],
     status: 'Pending',
     subscribedDate: '2026-11-15',
@@ -94,6 +114,52 @@ export function todayStr(): string {
 export function normalizePincode(raw: string): string | null {
   const digits = raw.replace(/\D/g, '');
   return /^[1-9]\d{5}$/.test(digits) ? digits : null;
+}
+
+export async function resolvePincode(pin: string, signal?: AbortSignal): Promise<ResolvedPincode | null> {
+  const normalized = normalizePincode(pin);
+  if (!normalized) return null;
+
+  try {
+    const res = await fetch(`/api/pincode?pin=${encodeURIComponent(normalized)}`, {
+      signal,
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+
+    const data: unknown = await res.json();
+    if (!data || typeof data !== 'object') return null;
+    const record = data as {
+      ok?: unknown;
+      district?: unknown;
+      state?: unknown;
+      places?: Array<{ name?: unknown }>;
+    };
+
+    if (
+      record.ok !== true ||
+      typeof record.district !== 'string' ||
+      !record.district.trim() ||
+      typeof record.state !== 'string' ||
+      !record.state.trim()
+    ) {
+      return null;
+    }
+
+    const firstPlaceName =
+      Array.isArray(record.places) && typeof record.places[0]?.name === 'string' && record.places[0].name.trim()
+        ? record.places[0].name.trim()
+        : record.district.trim();
+
+    return {
+      district: record.district.trim(),
+      state: record.state.trim(),
+      locality: firstPlaceName,
+    };
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return null;
+  }
 }
 
 export function normalizePhone(raw: string): string | null {
@@ -146,7 +212,13 @@ export function loadSubscriptions(): Subscription[] {
     if (Array.isArray(parsed)) {
       return parsed
         .filter(
-          (item): item is Omit<Subscription, 'pincode'> & { pincode?: unknown } =>
+          (
+            item,
+          ): item is Omit<Subscription, 'pincode' | 'district' | 'locality'> & {
+            pincode?: unknown;
+            district?: unknown;
+            locality?: unknown;
+          } =>
             Boolean(item) &&
             typeof item === 'object' &&
             typeof item.id === 'string' &&
@@ -159,6 +231,8 @@ export function loadSubscriptions(): Subscription[] {
         .map((item) => ({
           ...item,
           pincode: typeof item.pincode === 'string' ? item.pincode : '',
+          district: typeof item.district === 'string' && item.district.trim() ? item.district.trim() : undefined,
+          locality: typeof item.locality === 'string' && item.locality.trim() ? item.locality.trim() : undefined,
         }));
     }
   } catch {

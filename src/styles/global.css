@@ -790,3 +790,57 @@ button { font-family: inherit; cursor: pointer; }
   .sr-modal-foot .btn { justify-content: center; }
 }
 
+/* ============================================================
+   SEVERITY CONTRAST, ALERT AREA CHIPS & REGISTRY LOCATIONS
+   ============================================================ */
+.sev-tag.sev-Extreme,
+.sev-tag.sev-Severe { color: #ffffff; }
+.sev-tag.sev-Moderate,
+.sev-tag.sev-Minor,
+.sev-tag.sev-Unknown { color: #1b2430; }
+
+.al-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.al-chip { display: inline-block; font-size: 11px; line-height: 1.3; padding: 2px 7px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); color: var(--slate); max-width: 100%; overflow-wrap: anywhere; }
+.al-more-btn { border: 1px solid var(--line-strong); background: var(--surface); color: var(--teal-600); border-radius: 6px; padding: 2px 7px; font-size: 11px; font-weight: 700; cursor: pointer; }
+.al-more-btn:hover { border-color: var(--teal); background: var(--surface-2); }
+
+.sr-area-cell { display: flex; flex-direction: column; gap: 2px; }
+.sr-area-sub { font-size: 12px; color: var(--muted); }
+
+.sr-hz-btn { cursor: pointer; font-family: inherit; transition: border-color .15s, background .15s; }
+.sr-hz-btn:hover,
+.sr-hz-btn.sr-hz-open { border-color: var(--teal); background: rgba(22, 169, 154, 0.08); color: var(--navy); }
+.sr-hz-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; border: 1px solid rgba(16, 28, 44, 0.18); }
+.sr-hz-sev { font-size: 10.5px; font-weight: 700; color: var(--slate); }
+.sr-hz-count { font-size: 10.5px; font-weight: 700; padding: 0 5px; border-radius: 999px; background: var(--line); color: var(--navy); }
+
+.sr-table tbody tr.sr-detail-row:hover { background: transparent; }
+.sr-detail-row td { background: var(--surface-2); padding: 12px 14px; }
+.sr-detail-panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; max-width: min(100%, calc(100vw - 56px)); position: sticky; left: 0; }
+.sr-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.sr-detail-list { display: flex; flex-direction: column; gap: 10px; }
+.sr-detail-item { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--surface-2); display: flex; flex-direction: column; gap: 6px; }
+.sr-detail-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.sr-detail-event { font-size: 13px; font-weight: 700; color: var(--ink); }
+.sr-detail-time { font-size: 11.5px; color: var(--muted-2); margin-left: auto; }
+
+.sr-scope-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line-strong); color: var(--muted); }
+.sr-scope-badge.sr-scope-local { background: rgba(22, 169, 154, 0.14); border-color: rgba(22, 169, 154, 0.45); color: var(--teal-600); }
+
+.sr-area-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.sr-area-chip { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); color: var(--slate); overflow-wrap: anywhere; }
+.sr-area-chip.sr-area-chip-hit { background: rgba(22, 169, 154, 0.14); border-color: var(--teal); color: var(--navy); font-weight: 700; }
+
+.sr-detail-note { font-size: 12.5px; color: var(--muted); }
+.sr-detail-note a { color: var(--teal-600); text-decoration: underline; }
+.sr-detail-warn { font-size: 12.5px; font-weight: 600; color: #8f5a00; background: #fff8e8; border: 1px solid #f0cf8a; border-radius: 8px; padding: 7px 10px; }
+
+.sr-note { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.sr-warn-note { font-size: 12px; font-weight: 600; color: #8f5a00; background: #fff8e8; border: 1px solid #f0cf8a; border-radius: 6px; padding: 4px 8px; margin-top: 3px; }
+
+@media (max-width: 620px) {
+  .sr-detail-row td { padding: 10px; }
+  .sr-detail-panel { padding: 10px; max-width: calc(100vw - 48px); }
+  .sr-detail-time { margin-left: 0; }
+}
+

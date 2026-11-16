@@ -367,16 +367,63 @@ export default function LiveAlertsMap() {
 }
 
 function AlertRow({ a, unresolvedNote }: { a: SachetAlert; unresolvedNote?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   const href = safeHref(a.link);
-  const area = a.areaDesc.length > 90 ? `${a.areaDesc.slice(0, 90)}…` : a.areaDesc;
+  const areaParts = useMemo(
+    () =>
+      a.areaDesc
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean),
+    [a.areaDesc],
+  );
+  const visibleAreas = expanded ? areaParts : areaParts.slice(0, 6);
+  const extraCount = areaParts.length - 6;
+
   return (
     <div className="alert-row">
-      <span className="sev-tag" style={{ background: SEVERITY_COLOR[a.severity], color: '#fff' }}>{a.severity}</span>
+      <span className={`sev-tag sev-${a.severity}`} style={{ background: SEVERITY_COLOR[a.severity] }}>
+        {a.severity}
+      </span>
       <span className="al-body">
-        <span className="al-event">{a.event}<span className={`hz-tag hz-${a.hazard}`}>{HAZARD_SHORT[a.hazard]}</span></span>
-        {a.detailsInOriginal
-          ? <span className="al-area">Details in original alert{href && <> · <a href={href} target="_blank" rel="noreferrer">Source</a></>}</span>
-          : area && <span className="al-area" title={a.areaDesc}>{area}</span>}
+        <span className="al-event">
+          {a.event}
+          <span className={`hz-tag hz-${a.hazard}`}>{HAZARD_SHORT[a.hazard]}</span>
+        </span>
+        {a.detailsInOriginal ? (
+          <span className="al-area">
+            Details in original alert
+            {href && (
+              <>
+                {' '}
+                ·{' '}
+                <a href={href} target="_blank" rel="noreferrer">
+                  Source
+                </a>
+              </>
+            )}
+          </span>
+        ) : (
+          areaParts.length > 0 && (
+            <span className="al-chips">
+              {visibleAreas.map((part, idx) => (
+                <span className="al-chip" key={`${idx}-${part}`}>
+                  {part}
+                </span>
+              ))}
+              {extraCount > 0 && (
+                <button
+                  type="button"
+                  className="al-more-btn"
+                  aria-expanded={expanded}
+                  onClick={() => setExpanded((v) => !v)}
+                >
+                  {expanded ? 'Show fewer' : `+${extraCount} more`}
+                </button>
+              )}
+            </span>
+          )
+        )}
         {unresolvedNote && (
           <span className="al-note">
             Location not matched to a state{a.unresolvedAreas.length > 0 ? `: ${a.unresolvedAreas.join(', ')}` : ''}
