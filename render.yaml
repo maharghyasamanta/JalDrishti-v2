@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: jaldrishti-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: NODE_VERSION
+        value: 20
+      - key: ALERT_SCOPE
+        value: all
+      - key: SMS_PROVIDER
+        value: mock
+      - key: AUTO_DISPATCH_MODE
+        value: "off"

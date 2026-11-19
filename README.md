@@ -84,3 +84,9 @@ VITE_ALERTS_URL=https://alerts.example.org/api/alerts npm run build
 ## Data and limits
 
 The historical dataset is a prototype. Live alerts and earthquake feeds are convenience copies of public data: not an official alerting channel. For official warnings see SACHET (sachet.ndma.gov.in), IMD (mausam.imd.gov.in), and NCS (riseq.seismo.gov.in).
+
+## Deployment
+
+- **Backend (Render)**: Deploy the Node service in `server/` using `render.yaml` (service `jaldrishti-api`). In the Render dashboard, set `ADMIN_TOKEN` to a secret string of 24+ characters.
+- **Verify backend**: Once live, confirm `GET /healthz` and `GET /api/earthquakes` on your Render backend URL both return HTTP 200 JSON responses.
+- **Frontend (Netlify)**: Deploy the static site using `netlify.toml` (`npm run build` publishing `dist`). Once the Render backend is live, replace `REPLACE-WITH-RENDER-URL` in `netlify.toml` with your Render service URL and redeploy.
