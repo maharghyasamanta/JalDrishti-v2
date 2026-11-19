@@ -23,6 +23,7 @@ import {
   type Subscription,
 } from '../lib/subscriptions';
 import {
+  OUTBOX_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
   appendToOutbox,
   clearStoredOutbox,
@@ -366,7 +367,7 @@ export function DemoSmsProvider({ children }: { children: ReactNode }) {
     const onStorage = (e: StorageEvent) => {
       if (e.key === null || e.key === SUBSCRIPTIONS_STORAGE_KEY) {
         onSubChange();
-      } else if (e.key === 'jaldrishti:demo:outbox:v1') {
+      } else if (e.key === OUTBOX_STORAGE_KEY) {
         setOutboxState(loadOutbox());
       } else if (e.key === SETTINGS_STORAGE_KEY) {
         const s = loadSettings();

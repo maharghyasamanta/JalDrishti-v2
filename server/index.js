@@ -402,8 +402,12 @@ export function start() {
         return vitePromise;
       };
 
-  const port = Number(process.env.PORT) || 3000;
-  const host = process.env.HOST || '127.0.0.1';
+  const nginxOccupiedPort = Boolean(process.env.NGINX_PORT && process.env.PORT === process.env.NGINX_PORT);
+  const port =
+    nginxOccupiedPort || (!isProd && Number(process.env.PORT) === 8080)
+      ? Number(process.env.DEFAULT_APP_PORT) || 3000
+      : Number(process.env.PORT) || Number(process.env.DEFAULT_APP_PORT) || 3000;
+  const host = process.env.HOST || '0.0.0.0';
   const server = http.createServer(createHandler(alertsService, earthquakeService, { getViteMiddlewares, pincodeService }));
 
   server.on('error', (err) => {

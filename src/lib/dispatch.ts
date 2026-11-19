@@ -6,7 +6,7 @@ export type DispatchMode = 'broadcast' | 'targeted';
 export type LookbackHours = 24 | 168 | 720;
 export type SmsKind = 'alert' | 'earthquake';
 
-export const OUTBOX_STORAGE_KEY = 'jaldrishti:demo:outbox:v1';
+export const OUTBOX_STORAGE_KEY = 'jaldrishti:demo:outbox:v2';
 export const SETTINGS_STORAGE_KEY = 'jaldrishti:demo:sms-settings:v1';
 export const OUTBOX_MAX = 500;
 export const SMS_MAX_LEN = 160;
@@ -164,12 +164,38 @@ export function buildQuakeSms(q: Earthquake, _sub: Subscription): string {
   const issued = formatIstShort(q.time);
   const src = toGsmSafe(q.source || 'USGS') || 'USGS';
 
-  return fitToSmsLimit(
-    (placePart, srcPart) =>
-      `JalDrishti DEMO: M${mag} earthquake ${placePart} (${locLabel}), depth ${depth} km, ${issued}. Source ${srcPart}. Not official: riseq.seismo.gov.in. Emergency 112.`,
-    place,
-    src,
-  );
+  const formatMsg = (placePart: string, locPart: string, srcPart: string) =>
+    toGsmSafe(
+      `JalDrishti DEMO: M${mag} earthquake ${placePart} (${locPart}), depth ${depth} km, ${issued}. Source ${srcPart}. Not official: riseq.seismo.gov.in. Emergency 112.`,
+    );
+
+  const initial = formatMsg(place, locLabel, src);
+  if (initial.length <= SMS_MAX_LEN) return initial;
+
+  const over1 = initial.length - SMS_MAX_LEN;
+  const trimmedPlace = truncateText(place, Math.max(10, place.length - over1));
+  const step1 = formatMsg(trimmedPlace, locLabel, src);
+  if (step1.length <= SMS_MAX_LEN) return step1;
+
+  const over2 = step1.length - SMS_MAX_LEN;
+  const trimmedLoc = truncateText(locLabel, Math.max(8, locLabel.length - over2));
+  const step2 = formatMsg(trimmedPlace, trimmedLoc, src);
+  if (step2.length <= SMS_MAX_LEN) return step2;
+
+  const over3 = step2.length - SMS_MAX_LEN;
+  const shorterPlace = truncateText(place, Math.max(5, trimmedPlace.length - over3));
+  const step3 = formatMsg(shorterPlace, trimmedLoc, src);
+  if (step3.length <= SMS_MAX_LEN) return step3;
+
+  const over4 = step3.length - SMS_MAX_LEN;
+  const trimmedSrc = truncateText(src, Math.max(3, src.length - over4));
+  const step4 = formatMsg(shorterPlace, trimmedLoc, trimmedSrc);
+  if (step4.length <= SMS_MAX_LEN) return step4;
+
+  const over5 = step4.length - SMS_MAX_LEN;
+  const minLoc = truncateText(locLabel, Math.max(4, trimmedLoc.length - over5));
+  const finalMsg = formatMsg(shorterPlace, minLoc, trimmedSrc);
+  return finalMsg.length <= SMS_MAX_LEN ? finalMsg : finalMsg.slice(0, SMS_MAX_LEN);
 }
 
 export function selectIndiaQuakesInWindow(
@@ -207,16 +233,21 @@ export function planDeliveries({
   const seenInRun = new Set<string>();
   const createdAt = new Date(now).toISOString();
 
-  for (const sub of verifiedSubs) {
-    const masked = maskPhone(sub.phone);
+  const preparedSubs = verifiedSubs.map((sub) => ({
+    sub,
+    masked: maskPhone(sub.phone),
+  }));
 
-    for (const alert of alerts) {
+  for (const alert of alerts) {
+    const eventKey = `alert:${alert.id}`;
+    const eventLabel = toGsmSafe(alert.event || 'Weather Alert') || 'Weather Alert';
+
+    for (const { sub, masked } of preparedSubs) {
       if (mode === 'targeted') {
         if (!alert.states.includes(sub.state) || !sub.hazards.includes(alert.hazard)) {
           continue;
         }
       }
-      const eventKey = `alert:${alert.id}`;
       const deliveryKey = `${sub.id}|${eventKey}`;
       if (sentKeys.has(deliveryKey) || seenInRun.has(deliveryKey)) continue;
       seenInRun.add(deliveryKey);
@@ -233,25 +264,29 @@ export function planDeliveries({
         body: buildAlertSms(alert, sub),
         createdAt,
         read: false,
-        eventLabel: toGsmSafe(alert.event || 'Weather Alert') || 'Weather Alert',
+        eventLabel,
         badgeText: alert.severity,
         locationLabel: alertAreaSummary(alert, sub),
         source: 'NDMA SACHET',
       });
     }
+  }
 
-    for (const q of indiaQuakesInWindow) {
+  for (const q of indiaQuakesInWindow) {
+    const eventKey = `quake:${q.id}`;
+    const magText = Number.isFinite(q.magnitude) ? `M${q.magnitude.toFixed(1)}` : 'M?';
+    const eventLabel = toGsmSafe(q.location || q.region || 'India earthquake') || 'India earthquake';
+
+    for (const { sub, masked } of preparedSubs) {
       if (mode === 'targeted') {
         if (!sub.hazards.includes('earthquake') || !q.state || q.state !== sub.state) {
           continue;
         }
       }
-      const eventKey = `quake:${q.id}`;
       const deliveryKey = `${sub.id}|${eventKey}`;
       if (sentKeys.has(deliveryKey) || seenInRun.has(deliveryKey)) continue;
       seenInRun.add(deliveryKey);
 
-      const magText = Number.isFinite(q.magnitude) ? `M${q.magnitude.toFixed(1)}` : 'M?';
       planned.push({
         id: deliveryKey,
         eventKey,
@@ -264,7 +299,7 @@ export function planDeliveries({
         body: buildQuakeSms(q, sub),
         createdAt,
         read: false,
-        eventLabel: toGsmSafe(q.location || q.region || 'India earthquake') || 'India earthquake',
+        eventLabel,
         badgeText: magText,
         locationLabel: q.state ?? 'India',
         source: q.source || 'USGS/NCS',
@@ -337,8 +372,23 @@ export function appendToOutbox(current: OutboxState, incoming: DemoSms[]): Outbo
 
   const combined = [...uniqueIncoming, ...current.messages];
   const overflow = Math.max(0, combined.length - OUTBOX_MAX);
+  let messages: DemoSms[];
+  if (overflow === 0) {
+    messages = combined;
+  } else {
+    const alertMessages = combined.filter((m) => m.kind === 'alert');
+    const quakeMessages = combined.filter((m) => m.kind === 'earthquake');
+    if (alertMessages.length > 0 && quakeMessages.length > 0) {
+      const keptAlerts = alertMessages.slice(0, OUTBOX_MAX);
+      const keptQuakes = quakeMessages.slice(0, OUTBOX_MAX - keptAlerts.length);
+      messages = [...keptAlerts, ...keptQuakes];
+    } else {
+      messages = combined.slice(0, OUTBOX_MAX);
+    }
+  }
+
   const next: OutboxState = {
-    messages: combined.slice(0, OUTBOX_MAX),
+    messages,
     droppedCount: current.droppedCount + overflow,
   };
   saveOutbox(next);

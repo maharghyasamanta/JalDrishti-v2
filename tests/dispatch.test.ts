@@ -263,3 +263,64 @@ test('outbox caps at 500 newest messages and tracks droppedCount', () => {
   assert.equal(state.messages.length, OUTBOX_MAX);
   assert.equal(state.droppedCount, 20);
 });
+
+test('buildQuakeSms keeps DEMO and Emergency 112 intact even for long state/UT names', () => {
+  for (const stateName of ['Andaman and Nicobar Islands', 'Dadra and Nagar Haveli and Daman and Diu']) {
+    const longQuake: Earthquake = {
+      ...SAMPLE_QUAKES[0],
+      magnitude: 5.0,
+      location: '147km NNW of Lachung, Long Epicentre Description, India',
+      state: stateName,
+    };
+    const sms = buildQuakeSms(longQuake, SAMPLE_SUBS[0]);
+    assert.ok(sms.length <= SMS_MAX_LEN, `too long for ${stateName}: ${sms.length}`);
+    assert.match(sms, /\bDEMO\b/);
+    assert.match(sms, /Emergency 112\./);
+  }
+});
+
+test('planDeliveries fans out event-first across subscribers and appendToOutbox retains alerts on quake overflow', () => {
+  const res = planDeliveries({
+    subs: SAMPLE_SUBS,
+    alerts: [SAMPLE_ALERTS[0]],
+    quakes: [
+      SAMPLE_QUAKES[0],
+      { ...SAMPLE_QUAKES[1], time: '2026-11-16T07:00:00Z' },
+    ],
+    mode: 'broadcast',
+    lookbackHours: 24,
+    sentKeys: new Set(),
+    now: NOW,
+  });
+
+  // Alert spreads across both Verified subscribers before any earthquake, and each quake spreads across both subs
+  assert.deepEqual(
+    res.messages.map((m) => m.id),
+    [
+      'SUB-V1|alert:al-1',
+      'SUB-V2|alert:al-1',
+      'SUB-V1|quake:eq-assam',
+      'SUB-V2|quake:eq-assam',
+      'SUB-V1|quake:eq-old',
+      'SUB-V2|quake:eq-old',
+    ],
+  );
+
+  let state: OutboxState = {
+    messages: Array.from({ length: 10 }, (_, i) => ({
+      ...res.messages[0],
+      id: `SUB-V1|alert:a-${i}`,
+      eventKey: `alert:a-${i}`,
+    })),
+    droppedCount: 0,
+  };
+  const quakeFlood = Array.from({ length: 520 }, (_, i) => ({
+    ...res.messages[2],
+    id: `SUB-V1|quake:q-${i}`,
+    eventKey: `quake:q-${i}`,
+  }));
+  state = appendToOutbox(state, quakeFlood);
+  assert.equal(state.messages.length, OUTBOX_MAX);
+  assert.equal(state.messages.filter((m) => m.kind === 'alert').length, 10);
+  assert.equal(state.messages.filter((m) => m.kind === 'earthquake').length, OUTBOX_MAX - 10);
+});
