@@ -6,12 +6,14 @@ import { stateMeta } from '../data/states';
 import { applyFilters, defaultFilters, type FilterState } from '../lib/filters';
 import FilterToolbar from '../components/FilterToolbar';
 import IndiaMap from '../components/IndiaMap';
+import GoogleDisasterMap from '../components/GoogleDisasterMap';
 import MapLegend from '../components/MapLegend';
 import StatePanel from '../components/StatePanel';
 import Analytics from '../components/Analytics';
 import PageHeader from '../components/PageHeader';
 import { InfoIcon } from '../components/Icons';
 import { useSelection } from '../context/SelectionContext';
+import { computeStateGeoSummaries } from '../lib/googleMapsData';
 
 export default function Historical() {
   const geo = useIndiaGeo();
@@ -22,6 +24,7 @@ export default function Historical() {
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [resetSignal, setResetSignal] = useState(0);
+  const [mapView, setMapView] = useState<'india' | 'google'>('india');
 
   // Consume any target selection from search / navigation context
   useEffect(() => {
@@ -64,6 +67,7 @@ export default function Historical() {
 
   const filteredEvents = useMemo(() => applyFilters(EVENTS, filters), [filters]);
   const features = geo.data?.features ?? [];
+  const stateSummaries = useMemo(() => computeStateGeoSummaries(features), [features]);
   const selectedFeature = useMemo(
     () => features.find((f) => f.properties.st_nm === selectedState),
     [features, selectedState]
@@ -176,31 +180,71 @@ export default function Historical() {
             resultCount={filteredEvents.length}
           />
 
+          <div className="gmp-view-bar">
+            <div className="gmp-view-switch" role="group" aria-label="Historical map view mode">
+              <button
+                type="button"
+                className={`gmp-mode-btn${mapView === 'india' ? ' active' : ''}`}
+                aria-pressed={mapView === 'india'}
+                onClick={() => setMapView('india')}
+              >
+                India Choropleth
+              </button>
+              <button
+                type="button"
+                className={`gmp-mode-btn${mapView === 'google' ? ' active' : ''}`}
+                aria-pressed={mapView === 'google'}
+                onClick={() => setMapView('google')}
+              >
+                Google Maps
+              </button>
+            </div>
+          </div>
+
           <div className={`workspace${selectedState ? ' panel-open' : ''}`}>
             <div className="map-card">
-              {geo.loading && (
-                <div className="map-loading">
-                  <div className="spinner" />
-                  <div>Loading authentic India boundaries…</div>
-                </div>
-              )}
-              {geo.error && (
-                <div className="map-loading">
-                  <div style={{ color: 'var(--red)' }}>Failed to load map geometry: {geo.error}</div>
-                </div>
-              )}
-              {geo.data && (
+              {mapView === 'google' ? (
+                <GoogleDisasterMap
+                  events={filteredEvents}
+                  stateSummaries={stateSummaries}
+                  selectedItem={selectedEventId ? { kind: 'event', id: selectedEventId } : null}
+                  onSelectEvent={(id) => {
+                    if (id) handleSelectEvent(id);
+                    else setSelectedEventId(null);
+                  }}
+                  focusState={selectedState}
+                  onFocusStateChange={handleSelectState}
+                  height={660}
+                  title="Historical Water Disasters · Google Maps"
+                  subtitle={`${filteredEvents.length} filtered event${filteredEvents.length === 1 ? '' : 's'}`}
+                />
+              ) : (
                 <>
-                  <IndiaMap
-                    features={features}
-                    events={filteredEvents}
-                    selectedState={selectedState}
-                    onSelectState={handleSelectState}
-                    selectedEventId={selectedEventId}
-                    onSelectEvent={handleSelectEvent}
-                    resetSignal={resetSignal}
-                  />
-                  <MapLegend />
+                  {geo.loading && (
+                    <div className="map-loading">
+                      <div className="spinner" />
+                      <div>Loading authentic India boundaries…</div>
+                    </div>
+                  )}
+                  {geo.error && (
+                    <div className="map-loading">
+                      <div style={{ color: 'var(--red)' }}>Failed to load map geometry: {geo.error}</div>
+                    </div>
+                  )}
+                  {geo.data && (
+                    <>
+                      <IndiaMap
+                        features={features}
+                        events={filteredEvents}
+                        selectedState={selectedState}
+                        onSelectState={handleSelectState}
+                        selectedEventId={selectedEventId}
+                        onSelectEvent={handleSelectEvent}
+                        resetSignal={resetSignal}
+                      />
+                      <MapLegend />
+                    </>
+                  )}
                 </>
               )}
             </div>

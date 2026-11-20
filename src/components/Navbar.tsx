@@ -16,9 +16,9 @@ const LINKS = [
   { label: 'Home', to: '/', exact: true },
   { label: 'Disaster Map', to: '/historical#map' },
   { label: 'Historical Data', to: '/historical' },
-  { label: 'Disaster Analytics', to: '/historical#analytics' },
   { label: 'Live Alerts', to: '/live-alerts' },
   { label: 'Earthquakes', to: '/earthquakes' },
+  { label: 'Google Map', to: '/google-map' },
   { label: 'About Us', to: '/#about' },
 ];
 

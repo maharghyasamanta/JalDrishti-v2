@@ -12,6 +12,8 @@ import {
   HAZARD_ORDER, HAZARD_LABEL, HAZARD_SHORT,
   type AlertPlacement, type AlertSeverity, type AlertShape, type HazardGroup, type SachetAlert, type SachetData,
 } from '../lib/sachet';
+import GoogleDisasterMap from './GoogleDisasterMap';
+import { computeStateGeoSummaries } from '../lib/googleMapsData';
 
 type Status = 'loading' | 'ok' | 'stale' | 'error';
 
@@ -192,6 +194,7 @@ export default function LiveAlertsMap() {
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [hazard, setHazard] = useState<'all' | HazardGroup>('all');
+  const [mapView, setMapView] = useState<'india' | 'google'>('india');
   const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(() => {
@@ -309,6 +312,7 @@ export default function LiveAlertsMap() {
   const hazardWord = hazard === 'all' ? '' : `${HAZARD_SHORT[hazard].toLowerCase()} `;
 
   const features = geo.data?.features ?? [];
+  const stateSummariesGeo = useMemo(() => computeStateGeoSummaries(features), [features]);
   const mainland = useMemo(() => features.filter((f) => !ISLAND_NAMES.includes(f.properties.st_nm)), [features]);
   const islands = useMemo(() => features.filter((f) => ISLAND_NAMES.includes(f.properties.st_nm)), [features]);
 
@@ -622,6 +626,24 @@ export default function LiveAlertsMap() {
         <div className="live-toolbar">
           <span className="live-updated">{hasData && updated ? `Last updated ${updated} IST` : ''}</span>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="gmp-view-switch" role="group" aria-label="Live alerts map view mode">
+              <button
+                type="button"
+                className={`gmp-mode-btn${mapView === 'india' ? ' active' : ''}`}
+                aria-pressed={mapView === 'india'}
+                onClick={() => setMapView('india')}
+              >
+                India Map
+              </button>
+              <button
+                type="button"
+                className={`gmp-mode-btn${mapView === 'google' ? ' active' : ''}`}
+                aria-pressed={mapView === 'google'}
+                onClick={() => setMapView('google')}
+              >
+                Google Maps
+              </button>
+            </div>
             <Link
               className="btn btn-outline btn-sm"
               to={isDemoCoastal ? '/live-alerts' : '/live-alerts?demo=coastal'}
@@ -669,9 +691,39 @@ export default function LiveAlertsMap() {
         <div className="live-grid">
           <div className="live-main">
             <div className="map-card" style={{ background: MAP_THEME.sea }}>
-              {geo.loading && <div className="map-loading"><div className="spinner" /><div>Loading map…</div></div>}
-              {geo.error && <div className="map-loading"><div style={{ color: 'var(--red)' }}>Failed to load map geometry: {geo.error}</div></div>}
-              {geo.data && (
+              {mapView === 'google' ? (
+                <GoogleDisasterMap
+                  alerts={shownAlerts}
+                  stateSummaries={stateSummariesGeo}
+                  selectedItem={selectedAlertId ? { kind: 'alert', id: selectedAlertId } : null}
+                  onSelectAlert={(id) => {
+                    if (!id) {
+                      setSelectedAlertId(null);
+                      return;
+                    }
+                    const target = shownAlerts.find((item) => item.id === id);
+                    if (target) {
+                      setSelectedState(null);
+                      setSelectedAlertId(id);
+                      const idx = sortedPlaced.findIndex((item) => item.id === id);
+                      if (idx >= INITIAL_VISIBLE) setShowAll(true);
+                      scrollAlertRowIntoView(id);
+                    }
+                  }}
+                  focusState={selectedState}
+                  onFocusStateChange={(st) => {
+                    setSelectedAlertId(null);
+                    setSelectedState(st);
+                  }}
+                  height={620}
+                  title={`Google Maps · ${hazard === 'all' ? 'Active CAP Alerts' : `${HAZARD_SHORT[hazard]} Alerts`}`}
+                  subtitle={`${shownAlerts.length} active alert${shownAlerts.length === 1 ? '' : 's'}`}
+                />
+              ) : (
+                <>
+                  {geo.loading && <div className="map-loading"><div className="spinner" /><div>Loading map…</div></div>}
+                  {geo.error && <div className="map-loading"><div style={{ color: 'var(--red)' }}>Failed to load map geometry: {geo.error}</div></div>}
+                  {geo.data && (
                 <>
                   <div className="map-svg-wrap live-map-wrap" ref={wrapRef} style={{ background: MAP_THEME.sea }}>
                     <svg
@@ -905,6 +957,8 @@ export default function LiveAlertsMap() {
                     <span className="ll-item"><span className="ll-swatch lm-sw-approx" /><span>Approximate</span></span>
                     <span className="ll-item"><span className="ll-swatch lm-sw-none" style={{ background: MAP_THEME.land }} /><span>No alert shown</span></span>
                   </div>
+                </>
+                  )}
                 </>
               )}
             </div>

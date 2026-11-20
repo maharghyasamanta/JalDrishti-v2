@@ -7,6 +7,8 @@ import {
   fetchEarthquakes, magColor, magLabel, magCategory, formatTime, relativeTime,
   MAG_COLOR, type Earthquake, type EarthquakeData,
 } from '../lib/earthquakes';
+import GoogleDisasterMap from './GoogleDisasterMap';
+import { computeStateGeoSummaries } from '../lib/googleMapsData';
 
 const REFRESH_MS = 5 * 60 * 1000;
 
@@ -100,6 +102,7 @@ export default function EarthquakeMap() {
   const [selected, setSelected] = useState<Earthquake | null>(null);
   const [magFilter, setMagFilter] = useState<string>('all');
   const [showAll, setShowAll] = useState(false);
+  const [mapView, setMapView] = useState<'india' | 'google'>('india');
   const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(() => {
@@ -149,6 +152,7 @@ export default function EarthquakeMap() {
   }, [filtered]);
 
   const features = geo.data?.features ?? [];
+  const stateSummaries = useMemo(() => computeStateGeoSummaries(features), [features]);
   const mainland = useMemo(() => features.filter((f) => !ISLAND_NAMES.includes(f.properties.st_nm)), [features]);
   const islands = useMemo(() => features.filter((f) => ISLAND_NAMES.includes(f.properties.st_nm)), [features]);
 
@@ -213,9 +217,29 @@ export default function EarthquakeMap() {
 
         <div className="eq-toolbar">
           <span className="live-updated">{hasData && updated ? `Updated ${updated}` : ''}</span>
-          <button className="btn btn-outline btn-sm" onClick={load} disabled={refreshing}>
-            {refreshing ? 'Refreshing...' : 'Refresh data'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="gmp-view-switch" role="group" aria-label="Earthquake map view mode">
+              <button
+                type="button"
+                className={`gmp-mode-btn${mapView === 'india' ? ' active' : ''}`}
+                aria-pressed={mapView === 'india'}
+                onClick={() => setMapView('india')}
+              >
+                Zone Map
+              </button>
+              <button
+                type="button"
+                className={`gmp-mode-btn${mapView === 'google' ? ' active' : ''}`}
+                aria-pressed={mapView === 'google'}
+                onClick={() => setMapView('google')}
+              >
+                Google Maps
+              </button>
+            </div>
+            <button className="btn btn-outline btn-sm" onClick={load} disabled={refreshing}>
+              {refreshing ? 'Refreshing...' : 'Refresh data'}
+            </button>
+          </div>
         </div>
 
         {!loaded && !failed && <div className="eq-loading"><div className="spinner" /><div>Loading earthquake data…</div></div>}
@@ -229,9 +253,28 @@ export default function EarthquakeMap() {
         <div className="eq-grid">
           <div className="eq-main">
             <div className="eq-map-card">
-              {geo.loading && <div className="map-loading" style={{ background: '#eaf4f9' }}><div className="spinner" /><div>Loading map…</div></div>}
-              {geo.error && <div className="map-loading"><div style={{ color: 'var(--red)' }}>Map load failed: {geo.error}</div></div>}
-              {geo.data && (
+              {mapView === 'google' ? (
+                <GoogleDisasterMap
+                  quakes={filtered}
+                  stateSummaries={stateSummaries}
+                  selectedItem={selected ? { kind: 'quake', id: selected.id } : null}
+                  onSelectQuake={(id) => {
+                    if (!id) {
+                      setSelected(null);
+                      return;
+                    }
+                    const found = filtered.find((q) => q.id === id) ?? null;
+                    setSelected(found);
+                  }}
+                  height={700}
+                  title="Seismic Activity · Google Maps"
+                  subtitle={data ? `Source: ${data.source} · ${filtered.length} events` : 'Loading...'}
+                />
+              ) : (
+                <>
+                  {geo.loading && <div className="map-loading" style={{ background: '#eaf4f9' }}><div className="spinner" /><div>Loading map…</div></div>}
+                  {geo.error && <div className="map-loading"><div style={{ color: 'var(--red)' }}>Map load failed: {geo.error}</div></div>}
+                  {geo.data && (
                 <div className="map-svg-wrap eq-map-wrap" ref={wrapRef}>
                   <svg className="map-svg" viewBox={`0 0 ${EQ_W} ${EQ_H}`} preserveAspectRatio="xMidYMid meet" role="group" aria-label="Earthquake epicenter map of India with seismic zones">
                     <defs>
@@ -393,12 +436,14 @@ export default function EarthquakeMap() {
                     </div>
                   )}
 
-                  {/* Title chip */}
-                  <div className="eq-title-chip">
-                    <div className="t1">🌍 Seismic Activity · Last 30 Days</div>
-                    <div className="t2">{data ? `Source: ${data.source} · ${filtered.length} events` : 'Loading...'}</div>
+                    {/* Title chip */}
+                    <div className="eq-title-chip">
+                      <div className="t1">🌍 Seismic Activity · Last 30 Days</div>
+                      <div className="t2">{data ? `Source: ${data.source} · ${filtered.length} events` : 'Loading...'}</div>
+                    </div>
                   </div>
-                </div>
+                  )}
+                </>
               )}
             </div>
 

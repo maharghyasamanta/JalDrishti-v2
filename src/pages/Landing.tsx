@@ -128,6 +128,27 @@ export default function Landing() {
               </div>
             </Link>
           </div>
+
+          <Link to="/google-map" className="feature-card gmp-feature-card" aria-label="Open Interactive Google Maps Explorer">
+            <div className="gmp-feature-copy">
+              <div className="fc-top" style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div className="fc-icon-wrap" style={{ background: 'rgba(22, 169, 154, 0.14)', color: 'var(--teal-600)' }}>
+                    <MapPinIcon size={24} />
+                  </div>
+                  <span className="badge badge-verified">Google Maps Platform</span>
+                </div>
+              </div>
+              <h3 className="fc-title">Interactive Google Maps Explorer</h3>
+              <p className="fc-desc" style={{ marginBottom: 0 }}>
+                Combine live NDMA SACHET hazard polygons, 30-day seismic epicenters, and historical water disasters in one zoomable Google Map with Roadmap, Terrain, and Satellite views.
+              </p>
+            </div>
+            <div className="fc-action gmp-feature-cta">
+              <span>Launch Google Maps</span>
+              <span className="fc-arrow"><ArrowRight size={16} /></span>
+            </div>
+          </Link>
         </div>
       </section>
 
