@@ -395,19 +395,31 @@ export function start() {
             )
             .then((vite) => vite.middlewares)
             .catch((err) => {
-              log('Vite middleware unavailable, falling back to static dist:', err.message);
+              vitePromise = null;
+              log('Vite middleware unavailable, falling back to static dist:', redactError(err));
               return null;
             });
         }
         return vitePromise;
       };
 
+  const readArg = (flag) => {
+    const idx = process.argv.indexOf(flag);
+    if (idx !== -1 && idx + 1 < process.argv.length) return process.argv[idx + 1];
+    const eqPrefix = `${flag}=`;
+    const eqArg = process.argv.find((a) => a.startsWith(eqPrefix));
+    return eqArg ? eqArg.slice(eqPrefix.length) : undefined;
+  };
+  const argPort = Number(readArg('--port'));
+  const argHost = readArg('--host');
+
   const nginxOccupiedPort = Boolean(process.env.NGINX_PORT && process.env.PORT === process.env.NGINX_PORT);
+  const rawPort = Number.isFinite(argPort) && argPort > 0 ? argPort : Number(process.env.PORT);
   const port =
-    nginxOccupiedPort || (!isProd && Number(process.env.PORT) === 8080)
+    nginxOccupiedPort || (!isProd && rawPort === 8080)
       ? Number(process.env.DEFAULT_APP_PORT) || 3000
-      : Number(process.env.PORT) || Number(process.env.DEFAULT_APP_PORT) || 3000;
-  const host = process.env.HOST || '0.0.0.0';
+      : rawPort || Number(process.env.DEFAULT_APP_PORT) || 3000;
+  const host = argHost || process.env.HOST || '0.0.0.0';
   const server = http.createServer(createHandler(alertsService, earthquakeService, { getViteMiddlewares, pincodeService }));
 
   server.on('error', (err) => {
