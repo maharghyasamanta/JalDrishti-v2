@@ -30,7 +30,7 @@ export const MAX_CALIBRATED_DISTANCE_KM = 800;
 export const INTENSITY_SCALE_LABEL = 'Intensity (MMI/EMS-98 approx.)';
 export const IMPACT_METHOD_LABEL = 'Method: Szeliga et al. (2010), India-wide relationship';
 export const MAGNITUDE_CAVEAT = 'Magnitude as reported by NCS (may not be moment magnitude)';
-export const OUTSIDE_INDIA_NOTE = 'Estimate uses an India-calibrated formula and may be less accurate here.';
+export const OUTSIDE_INDIA_NOTE = 'Estimate uses an India-calibrated formula and may be less accurate outside India.';
 export const IMPACT_DISCLAIMER = 'Estimated area based on magnitude and depth. Not an official damage assessment.';
 export const TOO_SMALL_MESSAGE = 'Too small to estimate an affected area.';
 
