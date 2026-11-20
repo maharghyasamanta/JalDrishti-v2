@@ -283,12 +283,17 @@ export function parseCap(xml, rss = {}) {
     name: textOf(g, 'valueName'), value: textOf(g, 'value'),
   }))).filter((c) => c.value);
   const shapes = parseShapesFromAreas(areas);
-  const paramPoly = info
-    ? childrenOf(info, 'parameter')
-        .find((p) => textOf(p, 'valueName').trim().toLowerCase() === 'polygon url')
-    : null;
-  const rawPolyUrl = paramPoly ? textOf(paramPoly, 'value').trim() : '';
-  const polygonUrl = SACHET_POLYGON_URL_RE.test(rawPolyUrl) ? rawPolyUrl : null;
+  const polygonUrls = info
+    ? Array.from(
+        new Set(
+          childrenOf(info, 'parameter')
+            .filter((p) => textOf(p, 'valueName').trim().toLowerCase() === 'polygon url')
+            .map((p) => textOf(p, 'value').trim())
+            .filter((u) => SACHET_POLYGON_URL_RE.test(u)),
+        ),
+      )
+    : [];
+  const polygonUrl = polygonUrls[0] ?? null;
 
   const sev = info ? textOf(info, 'severity') : '';
   const severity = SEVERITIES.find((s) => s.toLowerCase() === sev.toLowerCase()) ?? 'Unknown';
@@ -340,6 +345,7 @@ export function parseCap(xml, rss = {}) {
     areaCodes,
     shapes,
     polygonUrl,
+    polygonUrls,
     waterRelated,
     hazard,
     link: rss.link || '',
