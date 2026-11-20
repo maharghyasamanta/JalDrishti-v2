@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { geoMercator, geoPath } from 'd3';
+import { geoCircle, geoMercator, geoPath } from 'd3';
 import type { GeoProjection } from 'd3';
 import { useIndiaGeo } from '../hooks/useIndiaGeo';
-import { ISLAND_NAMES, VIEW_W, VIEW_H } from '../lib/geo';
+import { ISLAND_NAMES } from '../lib/geo';
 import {
-  fetchEarthquakes, magColor, magLabel, magCategory, formatTime, relativeTime,
-  MAG_COLOR, type Earthquake, type EarthquakeData,
+  fetchEarthquakes, magLabel, magCategory, formatTime, relativeTime,
+  type Earthquake, type EarthquakeData,
 } from '../lib/earthquakes';
+import {
+  estimateEarthquakeImpact,
+  IMPACT_RING_SPECS,
+  INTENSITY_SCALE_LABEL,
+} from '../lib/estimateImpact';
+import { findOverlappingStates } from '../lib/quakeGeoOverlap';
 import GoogleDisasterMap from './GoogleDisasterMap';
 import { computeStateGeoSummaries } from '../lib/googleMapsData';
 
@@ -176,6 +182,53 @@ export default function EarthquakeMap() {
   const hasData = data && !failed;
   const updated = data?.generatedAt ? new Date(data.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }) : null;
 
+  const selectedImpact = useMemo(
+    () => (selected ? estimateEarthquakeImpact(selected.magnitude, selected.depth, { inIndia: selected.inIndia }) : null),
+    [selected],
+  );
+
+  const overlappingStates = useMemo(() => {
+    if (!selected || !selectedImpact || selectedImpact.maxRenderedRadiusKm <= 0 || features.length === 0) {
+      return [];
+    }
+    return findOverlappingStates(
+      selected.latitude,
+      selected.longitude,
+      selectedImpact.maxRenderedRadiusKm,
+      features,
+    );
+  }, [selected, selectedImpact, features]);
+
+  const projectedImpactRings = useMemo(() => {
+    if (!selected || !selectedImpact || selectedImpact.rings.length === 0) {
+      return [];
+    }
+    // Render outermost ring first so inner intensities layer cleanly on top.
+    return [...selectedImpact.rings]
+      .sort((a, b) => b.radiusKm - a.radiusKm)
+      .map((ring) => {
+        const angularRadiusDeg = (ring.radiusKm / 6371) * (180 / Math.PI);
+        const circleFeature = geoCircle()
+          .center([selected.longitude, selected.latitude])
+          .radius(angularRadiusDeg)
+          .precision(2)();
+        return {
+          ...ring,
+          d: path(circleFeature) ?? '',
+        };
+      })
+      .filter((ring) => ring.d.length > 0);
+  }, [selected, selectedImpact, path]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelected(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected]);
+
   const relPos = (e: { clientX: number; clientY: number }) => {
     const r = wrapRef.current!.getBoundingClientRect();
     return { px: e.clientX - r.left, py: e.clientY - r.top };
@@ -258,6 +311,7 @@ export default function EarthquakeMap() {
                   quakes={filtered}
                   stateSummaries={stateSummaries}
                   selectedItem={selected ? { kind: 'quake', id: selected.id } : null}
+                  selectedQuakeImpactRings={selectedImpact?.rings ?? []}
                   onSelectQuake={(id) => {
                     if (!id) {
                       setSelected(null);
@@ -410,14 +464,34 @@ export default function EarthquakeMap() {
                       ))}
                     </g>
 
+                    {/* Estimated affected area concentric rings (true geodesic km via D3 geoCircle) */}
+                    {projectedImpactRings.length > 0 && (
+                      <g className="eq-impact-rings" style={{ pointerEvents: 'none' }}>
+                        {projectedImpactRings.map((ring) => (
+                          <path
+                            key={`impact-${selected?.id}-${ring.level}`}
+                            d={ring.d}
+                            fill={ring.color}
+                            fillOpacity={ring.level === 'V' ? 0.18 : ring.level === 'IV' ? 0.12 : 0.08}
+                            stroke={ring.color}
+                            strokeWidth={ring.level === 'V' ? 2.2 : ring.level === 'IV' ? 1.8 : 1.6}
+                            strokeOpacity={0.92}
+                            strokeDasharray={ring.level === 'III' ? '6 4' : undefined}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        ))}
+                      </g>
+                    )}
+
                     {/* Epicenter markers */}
                     <g>
                       {projected.map((q) => (
                         <circle key={q.id} cx={q.px} cy={q.py}
                           r={radius(q.magnitude)}
                           fill={ncsMagColor(q.magnitude)}
-                          stroke="#333" strokeWidth={selected?.id === q.id ? 2 : 0.5}
-                          opacity={0.88}
+                          stroke={selected?.id === q.id ? '#101c2c' : '#333'}
+                          strokeWidth={selected?.id === q.id ? 2.4 : 0.5}
+                          opacity={0.9}
                           filter="url(#quakeGlow)"
                           style={{ cursor: 'pointer' }}
                           onClick={() => setSelected(q)}
@@ -447,17 +521,19 @@ export default function EarthquakeMap() {
               )}
             </div>
 
-            {/* Seismic zone & magnitude legend placed below the map so Northeast India is unobstructed */}
-            <div className="eq-zone-legend" aria-label="Seismic zone and magnitude legend">
-              <div className="zl-group">
-                <div className="zl-head">Seismic Zones</div>
-                <div className="zl-items">
-                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.V }} />Zone V (Very High)</div>
-                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.IV }} />Zone IV (High)</div>
-                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.III }} />Zone III (Moderate)</div>
-                  <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.II }} />Zone II (Low)</div>
+            {/* Unified legend below the map (shared across Zone Map and Google Maps) */}
+            <div className="eq-zone-legend" aria-label="Map and estimated affected area legend">
+              {mapView === 'india' && (
+                <div className="zl-group">
+                  <div className="zl-head">Seismic Zones</div>
+                  <div className="zl-items">
+                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.V }} />Zone V (Very High)</div>
+                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.IV }} />Zone IV (High)</div>
+                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.III }} />Zone III (Moderate)</div>
+                    <div className="zl-item"><span className="zl-swatch" style={{ background: ZONE_COLORS.II }} />Zone II (Low)</div>
+                  </div>
                 </div>
-              </div>
+              )}
               <div className="zl-group">
                 <div className="zl-head">Magnitude</div>
                 <div className="zl-items">
@@ -469,46 +545,198 @@ export default function EarthquakeMap() {
                   ))}
                 </div>
               </div>
+              <div className="zl-group">
+                <div className="zl-head">Estimated Affected Area · {INTENSITY_SCALE_LABEL}</div>
+                <div className="zl-items">
+                  {IMPACT_RING_SPECS.map((ring) => (
+                    <div className="zl-item" key={ring.level}>
+                      <span
+                        className={`zl-ring-swatch${ring.level === 'III' ? ' zl-ring-dashed' : ''}`}
+                        style={{ borderColor: ring.color, background: `${ring.color}22` }}
+                      />
+                      {ring.label}
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <p className="eq-disclaimer">
-              Seismic zone overlay is approximate (BIS IS 1893:2016). Earthquake data from{' '}
-              <a href="https://riseq.seismo.gov.in" target="_blank" rel="noreferrer">NCS (riseq.seismo.gov.in)</a> /{' '}
-              <a href="https://earthquake.usgs.gov" target="_blank" rel="noreferrer">USGS</a>.
+              {mapView === 'india' ? 'Seismic zone overlay is approximate (BIS IS 1893:2016). ' : ''}
+              Earthquake data from{' '}
+              <a href="https://riseq.seismo.gov.in" target="_blank" rel="noreferrer">National Center for Seismology (riseq.seismo.gov.in)</a>.
               Not an official alerting channel.
             </p>
           </div>
 
-          {/* Side list */}
+          {/* Side panel: Estimated Affected Area when an earthquake is selected, otherwise Recent Earthquakes */}
           <aside className="eq-list" aria-live="polite">
-            <div className="eq-list-head">
-              <div className="t1">Recent Earthquakes</div>
-              <div className="t2">{hasData && `${filtered.length} quakes · ${updated ? updated : ''}`}</div>
-            </div>
+            {selected && selectedImpact ? (
+              <div className="eq-impact-panel" data-testid="eq-impact-panel">
+                <div className="eq-impact-head">
+                  <div>
+                    <div className="t1">Estimated Affected Area</div>
+                    <div className="t2">
+                      {selected.region || selected.location}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setSelected(null)}
+                  >
+                    Back to list
+                  </button>
+                </div>
 
-            {hasData && listed.map((q) => (
-              <div key={q.id}
-                className={`eq-row${selected?.id === q.id ? ' eq-selected' : ''}`}
-                onClick={() => setSelected(q)} style={{ cursor: 'pointer' }}>
-                <span className="eq-mag" style={{ background: ncsMagColor(q.magnitude) }}>{q.magnitude.toFixed(1)}</span>
-                <span className="eq-body">
-                  <span className="eq-region">{q.region || q.location}</span>
-                  <span className="eq-detail">Depth: {q.depth}km · {q.latitude.toFixed(2)}°N, {q.longitude.toFixed(2)}°E</span>
-                  <span className="eq-time">{formatTime(q.time)} · {relativeTime(q.time)}</span>
-                </span>
+                <div className="eq-impact-summary">
+                  <div className="eq-impact-mag-row">
+                    <span className="eq-impact-mag" style={{ background: ncsMagColor(selected.magnitude) }}>
+                      M{selected.magnitude.toFixed(1)}
+                    </span>
+                    <div className="eq-impact-mag-meta">
+                      <div className="eq-impact-class">{magLabel(selected.magnitude)} earthquake</div>
+                      <div className="eq-impact-subnote">{selectedImpact.magnitudeCaveat}</div>
+                    </div>
+                  </div>
+
+                  <dl className="eq-impact-facts">
+                    <div>
+                      <dt>Depth</dt>
+                      <dd className="tabular-nums">{selected.depth} km</dd>
+                    </div>
+                    <div>
+                      <dt>Epicenter</dt>
+                      <dd className="tabular-nums">{selected.latitude.toFixed(2)}°N, {selected.longitude.toFixed(2)}°E</dd>
+                    </div>
+                    <div className="eq-fact-full">
+                      <dt>Location</dt>
+                      <dd>{selected.region || selected.location || 'Coordinates only'}</dd>
+                    </div>
+                    <div className="eq-fact-full">
+                      <dt>Origin time</dt>
+                      <dd className="tabular-nums">{formatTime(selected.time)} · {relativeTime(selected.time)}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                {selectedImpact.status === 'too_small' && (
+                  <div className="eq-impact-notice" data-testid="eq-too-small">
+                    {selectedImpact.message}
+                  </div>
+                )}
+
+                {selectedImpact.status === 'out_of_range' && (
+                  <div className="eq-impact-notice" data-testid="eq-out-of-range">
+                    {selectedImpact.message}
+                  </div>
+                )}
+
+                {selectedImpact.status === 'evaluated' && (
+                  <>
+                    <div className="eq-impact-section">
+                      <div className="eq-impact-sec-head">{selectedImpact.scaleLabel}</div>
+                      <div className="eq-impact-rings-list">
+                        {selectedImpact.ringOutcomes.map((outcome) => (
+                          <div className="eq-impact-ring-row" key={outcome.spec.level}>
+                            <span className="eq-impact-ring-label">
+                              <span
+                                className={`zl-ring-swatch${outcome.spec.level === 'III' ? ' zl-ring-dashed' : ''}`}
+                                style={{ borderColor: outcome.spec.color, background: `${outcome.spec.color}22` }}
+                              />
+                              {outcome.spec.label}
+                            </span>
+                            <span className="eq-impact-ring-val tabular-nums">
+                              {outcome.status === 'within_range'
+                                ? outcome.radiusKm > 0
+                                  ? `${outcome.radiusKm.toFixed(1)} km`
+                                  : 'Not reached at surface'
+                                : outcome.status === 'below_threshold'
+                                  ? 'Not reached at surface'
+                                  : 'Beyond 800 km'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {selectedImpact.omittedNotices.map((notice) => (
+                        <div className="eq-impact-omitted" key={notice}>
+                          {notice}
+                        </div>
+                      ))}
+
+                      {selectedImpact.message && (
+                        <div className="eq-impact-notice">{selectedImpact.message}</div>
+                      )}
+                    </div>
+
+                    {selectedImpact.maxRenderedRadiusKm > 0 && (
+                      <div className="eq-impact-section">
+                        <div className="eq-impact-sec-head">
+                          Overlapping Indian States / UTs (within {selectedImpact.maxRenderedRadiusKm.toFixed(1)} km)
+                        </div>
+                        {geo.loading && <div className="eq-impact-muted">Loading state boundaries…</div>}
+                        {geo.error && <div className="eq-impact-muted">State boundary data unavailable.</div>}
+                        {!geo.loading && !geo.error && overlappingStates.length === 0 && (
+                          <div className="eq-impact-muted">No Indian states or union territories within the rendered circles.</div>
+                        )}
+                        {!geo.loading && !geo.error && overlappingStates.length > 0 && (
+                          <ul className="eq-impact-states">
+                            {overlappingStates.map((st) => (
+                              <li key={st.name} className="eq-impact-state-row">
+                                <span>{st.name}</span>
+                                <span className="eq-impact-state-dist tabular-nums">
+                                  {st.containsEpicenter ? 'Epicenter inside' : `${st.minDistanceKm.toFixed(0)} km from epicenter`}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <div className="eq-impact-footer">
+                  <div className="eq-impact-method">{selectedImpact.methodLabel}</div>
+                  {selectedImpact.outsideIndiaNote && (
+                    <div className="eq-impact-warn">{selectedImpact.outsideIndiaNote}</div>
+                  )}
+                  <div className="eq-impact-disclaimer">{selectedImpact.disclaimer}</div>
+                </div>
               </div>
-            ))}
+            ) : (
+              <>
+                <div className="eq-list-head">
+                  <div className="t1">Recent Earthquakes</div>
+                  <div className="t2">{hasData && `${filtered.length} quakes · ${updated ? updated : ''}`}</div>
+                </div>
 
-            {hasData && filtered.length === 0 && <div className="eq-empty">No earthquakes for this filter.</div>}
-            {hasData && projected.length > 15 && (
-              <button className="btn btn-outline btn-sm" style={{ marginTop: 8 }} onClick={() => setShowAll((v) => !v)}>
-                {showAll ? 'Show fewer' : `Show all (${projected.length})`}
-              </button>
+                {hasData && listed.map((q) => (
+                  <div key={q.id}
+                    className={`eq-row${selected?.id === q.id ? ' eq-selected' : ''}`}
+                    onClick={() => setSelected(q)} style={{ cursor: 'pointer' }}>
+                    <span className="eq-mag" style={{ background: ncsMagColor(q.magnitude) }}>{q.magnitude.toFixed(1)}</span>
+                    <span className="eq-body">
+                      <span className="eq-region">{q.region || q.location}</span>
+                      <span className="eq-detail">Depth: {q.depth}km · {q.latitude.toFixed(2)}°N, {q.longitude.toFixed(2)}°E</span>
+                      <span className="eq-time">{formatTime(q.time)} · {relativeTime(q.time)}</span>
+                    </span>
+                  </div>
+                ))}
+
+                {hasData && filtered.length === 0 && <div className="eq-empty">No earthquakes for this filter.</div>}
+                {hasData && projected.length > 15 && (
+                  <button className="btn btn-outline btn-sm" style={{ marginTop: 8 }} onClick={() => setShowAll((v) => !v)}>
+                    {showAll ? 'Show fewer' : `Show all (${projected.length})`}
+                  </button>
+                )}
+
+                <div className="eq-source">
+                  Source: <a href="https://riseq.seismo.gov.in" target="_blank" rel="noreferrer">National Center for Seismology</a>. Auto-refreshes every 15 min.
+                </div>
+              </>
             )}
-
-            <div className="eq-source">
-              Source: <a href="https://riseq.seismo.gov.in" target="_blank" rel="noreferrer">National Center for Seismology</a>. Auto-refreshes every 15 min.
-            </div>
           </aside>
         </div>
       </div>

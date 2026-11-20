@@ -1,18 +1,11 @@
-// Earthquake data proxy — fetches from NCS (riseq.seismo.gov.in) and falls back to USGS.
+// Earthquake data proxy — fetches strictly from Government of India NCS (riseq.seismo.gov.in).
 // In-memory cache with 15-minute refresh cycle.
 import { pointInIndia } from './geo.js';
 import { findStateNames } from './states.js';
 
 export const NCS_URL = 'https://riseq.seismo.gov.in/riseq/earthquake';
-export const USGS_URL = 'https://earthquake.usgs.gov/fdsnws/event/1/query';
 export const REFRESH_MS = 15 * 60 * 1000; // 15 minutes
 export const REQUEST_TIMEOUT_MS = 15_000;
-
-// India bounding box (with generous buffer for nearby quakes)
-const MIN_LAT = 4;
-const MAX_LAT = 40;
-const MIN_LON = 65;
-const MAX_LON = 100;
 
 /**
  * Parse an NCS origin/table time string into UTC ISO-8601, returning null when unparseable.
@@ -198,75 +191,6 @@ async function fetchNCS(log, fetchImpl) {
 }
 
 /**
- * Fallback: fetch from USGS FDSN API (always available, GeoJSON format).
- * Gets all earthquakes in the India bounding box for the last 30 days.
- */
-async function fetchUSGS(log, fetchImpl) {
-  try {
-    const endDate = new Date();
-    const startDate = new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const start = startDate.toISOString().split('T')[0];
-    const end = endDate.toISOString().split('T')[0];
-
-    const url = `${USGS_URL}?format=geojson&starttime=${start}&endtime=${end}&minlatitude=${MIN_LAT}&maxlatitude=${MAX_LAT}&minlongitude=${MIN_LON}&maxlongitude=${MAX_LON}&orderby=time&limit=500`;
-
-    log(`USGS: Fetching ${url}`);
-    const res = await fetchImpl(url, {
-      headers: {
-        'User-Agent': 'JalDrishti/1.0 (independent disaster dashboard)',
-        'Accept': 'application/json',
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-
-    if (!res.ok) throw new Error(`USGS HTTP ${res.status}`);
-    const data = await res.json();
-
-    if (!data.features || !Array.isArray(data.features)) {
-      throw new Error('Invalid USGS response');
-    }
-
-    const quakes = [];
-    for (const f of data.features) {
-      const p = f?.properties;
-      const coords = f?.geometry?.coordinates;
-      if (!p || !Array.isArray(coords) || coords.length < 2) continue;
-
-      const lon = coords[0];
-      const lat = coords[1];
-      const depthKm = coords[2];
-      const mag = p.mag;
-      if (typeof mag !== 'number' || !Number.isFinite(mag)) continue;
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-      if (typeof p.time !== 'number' || !Number.isFinite(p.time)) continue;
-
-      quakes.push({
-        id: f.id || `usgs-${p.time}-${lat}-${lon}`,
-        magnitude: mag,
-        time: new Date(p.time).toISOString(),
-        latitude: lat,
-        longitude: lon,
-        depth: typeof depthKm === 'number' && Number.isFinite(depthKm) ? depthKm : 0,
-        region: p.place || '',
-        location: p.place || '',
-        type: p.type || 'earthquake',
-        source: 'USGS',
-        url: p.url || null,
-        felt: p.felt || null,
-        tsunami: p.tsunami || 0,
-        significance: p.sig || 0,
-      });
-    }
-
-    log(`USGS: Got ${quakes.length} earthquakes`);
-    return quakes;
-  } catch (e) {
-    log(`USGS fetch failed: ${e.message}`);
-    return null;
-  }
-}
-
-/**
  * Creates the earthquake data service with caching and auto-refresh.
  */
 export function createEarthquakeService({ log = () => {}, fetchImpl = globalThis.fetch } = {}) {
@@ -275,18 +199,12 @@ export function createEarthquakeService({ log = () => {}, fetchImpl = globalThis
   let running = null;
 
   async function refreshOnce() {
-    // Try NCS first, fall back to USGS
-    let quakes = await fetchNCS(log, fetchImpl);
-    let source = 'NCS';
-
-    if (!quakes || quakes.length === 0) {
-      quakes = await fetchUSGS(log, fetchImpl);
-      source = 'USGS';
-    }
+    const quakes = await fetchNCS(log, fetchImpl);
+    const source = 'NCS';
 
     if (!quakes || quakes.length === 0) {
       lastRefreshOk = false;
-      log('Both NCS and USGS failed');
+      log('NCS earthquake fetch returned no data');
       return;
     }
 

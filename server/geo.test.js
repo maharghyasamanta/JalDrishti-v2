@@ -58,46 +58,41 @@ describe('earthquake enrichment and parsing fixes', () => {
     assert.ok(logs.some((m) => m.includes('skipped 1')));
   });
 
-  test('USGS service drops null/NaN magnitudes and includes indiaCount', async () => {
-    const nowMs = Date.now() - 60_000;
+  test('NCS-only service classifies India states and does not fall back to USGS on failure', async () => {
+    const now = new Date(Date.now() - 60_000).toISOString().replace('T', ' ').slice(0, 19);
+    let calls = 0;
     const svc = createEarthquakeService({
       fetchImpl: async (url) => {
-        if (String(url).includes('riseq.seismo.gov.in')) {
-          return { ok: false, status: 503 };
-        }
+        calls += 1;
+        assert.ok(String(url).includes('riseq.seismo.gov.in'));
         return {
           ok: true,
           status: 200,
-          json: async () => ({
-            features: [
-              {
-                id: 'eq-null',
-                properties: { mag: null, time: nowMs, place: 'Assam, India', type: 'earthquake' },
-                geometry: { coordinates: [91.74, 26.14, 10] },
-              },
-              {
-                id: 'eq-in',
-                properties: { mag: 4.2, time: nowMs, place: 'Guwahati, India', type: 'earthquake' },
-                geometry: { coordinates: [91.74, 26.14, 15] },
-              },
-              {
-                id: 'eq-np',
-                properties: { mag: 4.8, time: nowMs, place: 'Kathmandu, Nepal', type: 'earthquake' },
-                geometry: { coordinates: [85.3, 27.7, 12] },
-              },
-            ],
-          }),
+          text: async () => `
+            <ul>
+              <li data-json='{"id":"bad","magnitude":"NaN","latitude":"26.14","longitude":"91.74","depth":"10","origin_time":"${now}","region":"Assam"}'></li>
+              <li data-json='{"id":"in1","magnitude":"4.5","latitude":"26.14","longitude":"91.74","depth":"15","origin_time":"${now}","region":"Kamrup, Assam"}'></li>
+              <li data-json='{"id":"np1","magnitude":"4.8","latitude":"27.70","longitude":"85.30","depth":"12","origin_time":"${now}","region":"Nepal"}'></li>
+            </ul>
+          `,
         };
       },
     });
 
     await svc.refresh();
     const payload = svc.getPayload();
+    assert.equal(calls, 1);
+    assert.equal(payload.source, 'NCS');
     assert.equal(payload.totalCount, 2);
     assert.equal(payload.indiaCount, 1);
-    assert.equal(payload.quakes.find((q) => q.id === 'eq-null'), undefined);
-    const indiaQuake = payload.quakes.find((q) => q.id === 'eq-in');
+    const indiaQuake = payload.quakes.find((q) => q.id === 'ncs-in1');
     assert.equal(indiaQuake.inIndia, true);
     assert.equal(indiaQuake.state, 'Assam');
+
+    const failSvc = createEarthquakeService({
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    });
+    await failSvc.refresh();
+    assert.equal(failSvc.getPayload(), null);
   });
 });

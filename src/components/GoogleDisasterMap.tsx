@@ -17,6 +17,7 @@ import { categoryLabel } from '../data/categories';
 import { STATES } from '../data/states';
 import type { Earthquake } from '../lib/earthquakes';
 import { formatTime as formatQuakeTime, magLabel, relativeTime } from '../lib/earthquakes';
+import type { ImpactRingEstimate } from '../lib/estimateImpact';
 import { formatDateRange, formatCoords } from '../lib/format';
 import { formatSent, formatUntil, HAZARD_SHORT, type SachetAlert } from '../lib/sachet';
 import {
@@ -45,6 +46,7 @@ interface Props {
   events?: DisasterEvent[];
   stateSummaries?: Record<string, StateGeoSummary>;
   selectedItem?: SelectedMapItem | null;
+  selectedQuakeImpactRings?: ImpactRingEstimate[];
   onSelectAlert?: (id: string | null) => void;
   onSelectQuake?: (id: string | null) => void;
   onSelectEvent?: (id: string | null) => void;
@@ -109,6 +111,7 @@ function GoogleDisasterMapInner({
   events = [],
   stateSummaries = {},
   selectedItem = null,
+  selectedQuakeImpactRings = [],
   onSelectAlert,
   onSelectQuake,
   onSelectEvent,
@@ -222,13 +225,39 @@ function GoogleDisasterMapInner({
     if (activeSelection.kind === 'event') pos = eventById[activeSelection.id]?.position ?? null;
 
     if (pos) {
+      if (activeSelection.kind === 'quake' && selectedQuakeImpactRings.length > 0) {
+        const maxRadiusKm = selectedQuakeImpactRings.reduce((max, r) => Math.max(max, r.radiusKm), 0);
+        if (maxRadiusKm > 0) {
+          const latDelta = (maxRadiusKm / 6371) * (180 / Math.PI);
+          const cosLat = Math.max(0.15, Math.cos((pos.lat * Math.PI) / 180));
+          const lngDelta = latDelta / cosLat;
+          map.fitBounds(
+            {
+              north: Math.min(85, pos.lat + latDelta),
+              south: Math.max(-85, pos.lat - latDelta),
+              east: pos.lng + lngDelta,
+              west: pos.lng - lngDelta,
+            },
+            48,
+          );
+          const idleListener = google.maps.event.addListenerOnce(map, 'idle', () => {
+            const z = map.getZoom();
+            if (typeof z === 'number' && z > 12) {
+              map.setZoom(12);
+            }
+          });
+          return () => {
+            google.maps.event.removeListener(idleListener);
+          };
+        }
+      }
       map.panTo(pos);
       const currentZoom = map.getZoom();
       if (typeof currentZoom === 'number' && currentZoom < 6.5) {
         map.setZoom(6.8);
       }
     }
-  }, [activeSelection, alertById, quakeById, eventById, map]);
+  }, [activeSelection, alertById, quakeById, eventById, map, selectedQuakeImpactRings]);
 
   // Fit bounds when focusState changes
   useEffect(() => {
@@ -397,6 +426,25 @@ function GoogleDisasterMapInner({
               </RegisteredAdvancedMarker>
             );
           })}
+
+          {/* Selected Earthquake Estimated Impact Rings (rendered in meters, outer to inner) */}
+          {selectedQuakeItem &&
+            [...selectedQuakeImpactRings]
+              .sort((a, b) => b.radiusKm - a.radiusKm)
+              .map((ring) => (
+                <Circle
+                  key={`quake-impact:${selectedQuakeItem.id}:${ring.level}`}
+                  center={selectedQuakeItem.position}
+                  radius={ring.radiusKm * 1000}
+                  strokeColor={ring.color}
+                  strokeOpacity={0.92}
+                  strokeWeight={ring.level === 'V' ? 2.4 : ring.level === 'IV' ? 2 : 1.8}
+                  fillColor={ring.color}
+                  fillOpacity={ring.level === 'V' ? 0.18 : ring.level === 'IV' ? 0.12 : 0.08}
+                  clickable={false}
+                  zIndex={ring.level === 'V' ? 393 : ring.level === 'IV' ? 392 : 391}
+                />
+              ))}
 
           {/* Earthquake Markers */}
           {quakeMarkers.map((item, index) => {
